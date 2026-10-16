@@ -1,0 +1,2 @@
+# Install only into the dedicated inference-venv; keep the system Python unchanged.
+onnxruntime==1.23.2

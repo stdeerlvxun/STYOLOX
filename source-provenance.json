@@ -1,0 +1,188 @@
+{
+  "training": {
+    "source_commit": "435ad1bbf999ab93e5946e3ceb9a34b696d40586",
+    "files": [
+      {
+        "path": ".gitignore",
+        "sha256": "81e271d4422393e3d29464a347e947c574d2868f63a51389a969d69a611a01a9"
+      },
+      {
+        "path": "README.md",
+        "sha256": "b12cdd5ed053c4285ddcf64b93aedb1b72c2133149d32f4b4548289d82bdb0fe"
+      },
+      {
+        "path": "export_recommendations.py",
+        "sha256": "8764093a4c1c964a1bd5be978dc2ed12d1637def27c0096b33348b21e2ab96c3"
+      },
+      {
+        "path": "finetune_classifier.py",
+        "sha256": "17efaf12f2a6e3f474ad6ad175fe231d3814eb0d5f4ab9a6d362bac05e27bcd9"
+      },
+      {
+        "path": "improve_classifier.py",
+        "sha256": "bd53d55592547ac49859a3e6b6b40ad24fb3391880f92a1f19253a358fc73a2e"
+      },
+      {
+        "path": "recall_classifier.py",
+        "sha256": "e87eb953a00ce2a417a91159cfe5d05f2aa10408bb1f89558ba71a700dc72221"
+      },
+      {
+        "path": "retrain_latest.py",
+        "sha256": "b86a55589f07d424951f0d2cba9b6e27b0ae9189cfe81a90b91191f46a7f9c0f"
+      },
+      {
+        "path": "test_classifier.py",
+        "sha256": "1e5ce23e79e0b143f7fbc778889a612a794df4ff0e520c187a93253b4ff2ca0b"
+      },
+      {
+        "path": "test_improve_classifier.py",
+        "sha256": "1df19832ddaea3c6cde5e79c5fc1fb005c35abbf6a9a78b06cf47df740796194"
+      },
+      {
+        "path": "test_retrain_latest.py",
+        "sha256": "e9c903167720f40c304b397758b3af673e46f883405e74fc612bafb1c712594c"
+      },
+      {
+        "path": "test_unrelated_filter.py",
+        "sha256": "dd98b18d294b48a3d5e50cda8529f8ba3a692abc0502b156ff1fcf8f457604f0"
+      },
+      {
+        "path": "unrelated_filter.py",
+        "sha256": "665831faf39e020ad9443c5ba71466b73c0bc55758f0f5e39de07d90ca004ff7"
+      },
+      {
+        "path": "vision_classifier.py",
+        "sha256": "93c7f75272729e2eb96ae2b023858c87b5242d959c3884a3255fcc78b99f8ee4"
+      }
+    ]
+  },
+  "labeler": {
+    "source_commit": "bdedc5c6357dbb8a6da32c3338774b56bada0c5e",
+    "files": [
+      {
+        "path": ".gitignore",
+        "sha256": "b49539d559d117ae1a1d52781ec60121bd827f2ebd70e3bbee5571d695b0866d"
+      },
+      {
+        "path": "DESIGN.md",
+        "sha256": "7ca3e134d8bfbe20e680692e6796203bcac2586049e61fdb4c4b6c02bc4a5242"
+      },
+      {
+        "path": "PRODUCT.md",
+        "sha256": "cdde93eadc3fc7dbdbbabaac033a77a1a37cbf10f543fbe11938d1c5cf5f67c2"
+      },
+      {
+        "path": "README.md",
+        "sha256": "8bedff2a037932e801e0aa7c127ff21ec4b57c2a27e666c8687b2594c8fd64ae"
+      },
+      {
+        "path": "annotations.py",
+        "sha256": "b4a89c5d10c8f4dbe9d5d84cdc72a6b38e0ef69c8d281379ec29b1bb7b8d611e"
+      },
+      {
+        "path": "app.py",
+        "sha256": "3b2ac268595f45b4290f0844c31edc9ec1f8e32b29a03e66a57db66d901f1f7e"
+      },
+      {
+        "path": "deployment/enable_recommendations_101.py",
+        "sha256": "08bc1c49d0c7724c5b12558ae736e9ae52d6b2372632ce895233433c6c5e1591"
+      },
+      {
+        "path": "deployment/finalize_101.py",
+        "sha256": "1335348a82c38f9c12cf0d0ae6ca1f78b87b2a1dfe03e1ac32d507afa4cd43d6"
+      },
+      {
+        "path": "deployment/handoff.py",
+        "sha256": "a04ba70b8862feaff06f16acc7fce116befd5fb043ef8cc84603906099be20dd"
+      },
+      {
+        "path": "deployment/import_error_review.py",
+        "sha256": "9d81ff00f9aac9cc9603a746fb8c121a5e15b3f4b3f9128c38550b463cf9f844"
+      },
+      {
+        "path": "deployment/requirements-inference.txt",
+        "sha256": "be4cfa20624f9219ea71b6801d7759ee6e7de3d96e49f3087c7d6326380a00c1"
+      },
+      {
+        "path": "deployment/setup_101.py",
+        "sha256": "7c628bcdd6d0051d746d914517992f77a9f3e27a61b517d5b07326c0bb704f51"
+      },
+      {
+        "path": "deployment/snapshot.py",
+        "sha256": "0baca84500a43a4087cd36a53938460e4c3ca4cfa94c2052c7b787c42298f9e8"
+      },
+      {
+        "path": "deployment/upgrade_101.py",
+        "sha256": "d52a74bab9f89d6a3bca9b221384177c158508202261e23652e7d6df1020ab65"
+      },
+      {
+        "path": "deployment/verify_annotations.py",
+        "sha256": "b41a7305068f802175e6be358d9e3317061bf10194d8d275b5f49db7355833a8"
+      },
+      {
+        "path": "deployment/verify_recommendations.py",
+        "sha256": "6d882e499e510b59c3ebfe866aeeda2b90cf33bb3c934dad34d0c6a7d72759e0"
+      },
+      {
+        "path": "deployment/verify_recommendations_api.py",
+        "sha256": "a47bd909bad02ce70d90c9f3356bc1235358c62a21706b28d14954f137994756"
+      },
+      {
+        "path": "recommendations.py",
+        "sha256": "ec312570f94430b6a3c4074e37a6ba72784a13fdaab162e75bf7af04dccd53ec"
+      },
+      {
+        "path": "requirements.txt",
+        "sha256": "1c803ca04270f3acd340ace239b1e86931871344e0070b4f6db9a59ae56336cb"
+      },
+      {
+        "path": "start.ps1",
+        "sha256": "f06cc9131ea27998b801aec79dc55a082f309cca20cbf97fc7578e4eaca137be"
+      },
+      {
+        "path": "test_annotation_geometry.cjs",
+        "sha256": "5204f09d425b8ac5a89345440cb0312d94934a3e3b33b576cd4f17ce5052598a"
+      },
+      {
+        "path": "test_annotation_ui.cjs",
+        "sha256": "8667df7508351b7865765c98bc519df83700ce52ec36fd9f9fbf3a0af5e2d9f1"
+      },
+      {
+        "path": "test_annotations.py",
+        "sha256": "28cf560d30ce53e6eddb5ae6be21c96b54212309793ac748977f03688b9836f5"
+      },
+      {
+        "path": "test_app.py",
+        "sha256": "b89c03dd503b65e8b82898c0efa6c0d7bcff96d42a151844a158d0aab60f9ebc"
+      },
+      {
+        "path": "test_recommendations.py",
+        "sha256": "9956c2a5ca5fb8b595a2d13a037ceeadd505ef022b991d0064d575b9ff5fe763"
+      },
+      {
+        "path": "test_rules.cjs",
+        "sha256": "1cc89184a8d859008fa2d2d9ecc703ca2bfcb7df077b1bec7a073864c028ddea"
+      },
+      {
+        "path": "web/annotations.js",
+        "sha256": "03d9b6b317d9a64d8eb3962a6cd8d62ce463ebb8c37a0179c7ff2a66578dce74"
+      },
+      {
+        "path": "web/app.js",
+        "sha256": "fecda1caff1ec157550d949a50ddf768bea7558fe333997d5b0d851402fe2a2f"
+      },
+      {
+        "path": "web/index.html",
+        "sha256": "3e5e7e9c904c6983e77b79aeee2c80060e50a8de3087b42b737d3241609f22c9"
+      },
+      {
+        "path": "web/style.css",
+        "sha256": "4c428e4da8b63453b30f9607ffb6f82cb6b8cc1731440e57cc93ea431d02ffaf"
+      },
+      {
+        "path": "启动分类工具.cmd",
+        "sha256": "950f2f506c829af4dfc1639964874b1c8c88d355e897643c77a79abdb29f5c77"
+      }
+    ]
+  }
+}

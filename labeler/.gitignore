@@ -1,0 +1,10 @@
+data/
+__pycache__/
+*.pyc
+*.log
+.impeccable/*
+!.impeccable/design.json
+.qa-data/
+evidence/
+migration/
+server-url.txt

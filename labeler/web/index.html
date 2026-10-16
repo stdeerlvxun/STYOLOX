@@ -1,0 +1,103 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>售后图片分类</title>
+  <link rel="stylesheet" href="/style.css">
+  <script src="/app.js" defer></script>
+  <script src="/annotations.js" defer></script>
+</head>
+<body>
+  <header class="app-header">
+    <div class="title-line"><h1>售后图片分类</h1><span id="sourceNote" class="source-note">直接查看原图 · 标签保存在本机</span><span id="counts" role="status"></span></div>
+    <details id="directorySettings"><summary>目录 / 导入导出</summary><div class="directory-line">
+      <label for="rootPath">原始目录</label><input id="rootPath" spellcheck="false" aria-label="原始图片目录">
+      <button id="openRoot">打开目录</button><button id="rescan">重新扫描</button>
+      <button id="toggleImport">导入已有分类</button>
+      <select id="exportFormat" aria-label="导出格式"><option value="json">JSON</option><option value="csv">CSV</option></select>
+      <button id="export">导出当前筛选</button>
+      <a class="text-button" href="/api/annotations/export" download>导出位置补标</a>
+    </div></details>
+    <div id="scanStatus" class="scan-status" role="status">正在连接本机服务…</div>
+  </header>
+  <section id="importPanel" class="import-panel" hidden aria-label="导入已有文件夹分类">
+    <label for="manifestPath">批次清单 JSON</label><input id="manifestPath" spellcheck="false">
+    <button id="previewImport">预览导入</button><button id="applyImport" hidden>确认导入标签</button>
+    <p id="importSummary">识别已经放入分类文件夹的图片，仅导入标签，不移动文件。</p>
+  </section>
+  <main class="workspace">
+    <aside class="library" aria-label="图片筛选和列表">
+      <div class="filter-controls">
+        <div class="filter-heading"><h2>图片</h2><span id="resultCount">0 张</span></div>
+        <p class="small muted">近期优先 · 按售后单日期从近到远</p>
+        <label class="sr-only" for="statusFilter">分类状态</label>
+        <select id="statusFilter"><option value="unclassified">日常分类 · 跳过模型待审核</option><option value="error_review">错例待复核 / 补标</option><option value="error_reviewed">本轮错例已复核</option><option value="annotation_pending">问题图待位置补标</option><option value="annotated">已有位置补标</option><option value="model_unrelated">模型判定无关 · 待审核</option><option value="all_unclassified">所有未分类 · 含模型待审核</option><option value="all">全部图片</option><option value="classified">已分类</option><option value="unrelated">已确认无关图片</option><option value="normal">已确认无可见破损</option><option value="pending">责任待核 / 看不清</option><option value="unavailable">源文件不可用</option></select>
+        <select id="reviewKind" aria-label="错例类型" hidden><option value="">全部错例</option><option value="problem_miss">问题点漏判</option><option value="extra_candidate">问题点额外候选</option><option value="normal_overcall">正常图报出问题</option><option value="false_unrelated">相关图误判无关</option><option value="missed_unrelated">未识别出的无关图</option></select>
+        <div id="reviewActions" hidden><button id="selectReviewPage">选中本页</button><button id="confirmReviewSelected">确认所选无关</button></div>
+        <label class="sr-only" for="search">搜索图片</label><input id="search" placeholder="搜索文件名、售后单或备注" type="search">
+        <details id="filterDetails"><summary>按问题点和责任筛选 <span id="filterNumber"></span></summary>
+          <p class="small muted">两组同时满足；组内满足任意标签</p>
+          <h3>问题点</h3><div id="defectFilters" class="chips compact"></div>
+          <h3>责任</h3><div id="responsibilityFilters" class="chips compact"></div>
+          <button id="clearFilters" class="text-button">清除标签筛选</button>
+        </details>
+      </div>
+      <div id="thumbViewport" class="thumb-viewport" tabindex="0" aria-label="图片缩略图，滚动加载更多"><div id="thumbSpace"></div></div>
+      <div class="selection-bar"><span id="selectionCount">未选中图片</span><button id="clearSelection" class="text-button">清空</button><button id="batch" disabled>批量追加标签</button></div>
+    </aside>
+    <section class="viewer" aria-label="原图查看">
+      <div class="viewer-toolbar"><span id="position">等待图片</span><div class="viewer-buttons"><button id="showLibrary">图片列表</button><button id="previous" title="上一张（左方向键）">上一张</button><button id="next" title="下一张（右方向键）">下一张</button><button id="fit">适合窗口</button><button id="rotate">旋转</button><button id="fullResolution">原始清晰度</button><button id="toggleAnnotations" aria-pressed="false">位置补标</button></div></div>
+      <section id="annotationBar" class="annotation-bar" hidden aria-label="问题位置补标">
+        <p id="errorReviewSummary" class="small" role="status">原分类保留，位置补标单独保存。</p>
+        <div class="annotation-controls"><select id="boxProblem" aria-label="新框或改框的问题类型"></select><button id="drawBox" aria-pressed="false">开始框选</button><select id="boxSelect" aria-label="选择已有问题框"></select><button id="relabelBox">修改框类型</button><button id="deleteBox">删除选中框</button><button id="undoBox">撤销改框</button></div>
+        <div class="annotation-controls"><select id="reviewOutcome" aria-label="本次复核结果"><option value="boxed">已框选问题位置</option><option value="labels_correct">原分类正确 / 无需加框</option><option value="needs_correction">原分类需另行修改</option><option value="unclear">看不清，继续排除训练</option></select><button id="confirmAnnotation" class="primary">保存补标并下一张</button><button id="reloadAnnotation" class="text-button">重新读取</button><span id="annotationStatus" class="small" role="status"></span></div>
+      </section>
+      <div id="photoStage" class="photo-stage" tabindex="0" aria-label="图片画布，滚轮缩放，拖动平移">
+        <!-- impeccable-disable-next-line broken-image: viewer stays hidden until a real source-image blob is assigned -->
+        <img id="photo" alt="" draggable="false" hidden>
+        <svg id="annotationOverlay" aria-hidden="true" hidden></svg>
+        <div id="imageMessage" class="image-message"><strong>正在索引原始目录</strong><span>找到图片后即可开始，不必等待全部扫描完成。</span></div>
+        <div id="imageBusy" class="image-busy" hidden>正在读取图片…</div>
+        <button id="retryImage" class="retry-image" hidden>重新读取</button>
+      </div>
+      <div class="file-caption"><span id="fileName">原图不移动、不复制</span><button id="locate" class="text-button" disabled>定位原文件</button></div>
+      <div class="viewer-footer"><span>滚轮缩放 · 拖动查看 · 旋转仅影响显示</span><span id="loadHint">按需加载 / 相邻预读</span></div>
+    </section>
+    <aside class="label-panel" aria-label="图片标签" data-step="1">
+      <div class="label-scroll">
+        <div class="label-heading"><h2 id="workflowTitle">1 · 先找问题点</h2><button id="backToProblems" class="text-button" hidden>返回问题点</button><span id="saveStatus" role="status">未选择图片</span></div>
+        <p class="muted small label-intro">问题点可多选；专属问题自动定责，共性问题再选责任。</p>
+        <section id="recommendationPanel" class="recommendation-panel" hidden aria-labelledby="recommendationTitle">
+          <h3 id="recommendationTitle">模型建议 · 待确认</h3>
+          <p id="recommendationStatus" class="small muted" role="status">正在生成问题点建议…</p>
+          <div id="recommendationTags" class="chips" aria-label="建议的问题点"></div>
+          <div class="recommendation-actions"><button id="adoptRecommendations" hidden>采用全部问题点</button><button id="retryRecommendations" class="text-button" hidden>重试</button><div class="recommendation-pages"><button id="recommendationPrevious" aria-label="上一组建议">上一组</button><span id="recommendationPage">1/1</span><button id="recommendationNext" aria-label="下一组建议">下一组</button></div></div>
+          <p class="small muted recommendation-note">建议可能多报或漏报，采用后按 Enter 确认。</p>
+        </section>
+        <section id="problemSection" class="label-section"><h3>问题点 <span class="shortcut">1–5</span></h3><div id="defectTags" class="chips"></div>
+          <details class="add-tag-details"><summary>新增问题点</summary><form id="addDefect" class="add-tag"><input name="name" aria-label="新增问题点" placeholder="输入问题点名称" maxlength="50"><button type="submit">添加</button></form></details>
+        </section>
+        <div class="label-tools">
+        <section id="responsibilitySection" class="label-section"><h3>责任 <button id="restoreDefaultResponsibility" class="text-button">恢复默认</button></h3><div class="responsibility-switch"><select id="responsibilityProblem" aria-label="当前编辑责任的问题点"></select><button id="nextResponsibility">下一待选</button></div><p id="responsibilityHint" class="muted small" role="status"></p><div class="responsibility-advice"><span id="responsibilityAdvice" class="small"></span><button id="applyResponsibilityAdvice">采用建议</button></div><div id="responsibilityTags" class="chips"></div>
+          <details class="add-tag-details"><summary>新增责任标签</summary><form id="addResponsibility" class="add-tag"><input name="name" aria-label="新增责任标签" placeholder="输入标签名称" maxlength="50"><button type="submit">添加</button></form></details>
+        </section>
+        <div class="secondary-tools"><section id="imageStateSection" class="label-section"><h3>图片状态</h3><div id="imageStates" class="image-states">
+          <button data-state="normal" aria-pressed="false">确认无可见破损</button><button data-state="unclear" aria-pressed="false">看不清 / 无法判断</button><button data-state="unrelated" aria-pressed="false">非板件 / 无关图片</button>
+        </div></section>
+        <button id="rejectUnrelated" class="text-button" hidden>模型判错 · 返回问题点分类</button>
+        <section class="label-section"><label for="note"><h3>备注</h3></label><textarea id="note" rows="1" maxlength="4000" placeholder="补充位置、待核原因等"></textarea></section>
+        <details id="contextDetails"><summary>关联售后信息</summary><pre id="caseContext">展开后按需读取售后单信息。</pre></details>
+        </div></div>
+        <section id="batchPanel" class="batch-panel" hidden><h3>批量追加确认</h3><p id="batchSummary"></p><button id="applyBatch" class="primary">确认追加并标记完成</button><button id="cancelBatch">取消</button></section>
+      </div>
+      <div class="commit-bar"><button id="commit" class="primary" disabled>保存并下一张 <kbd>Enter</kbd></button>
+        <div><button id="skip">跳过</button><button id="undo">撤销上次确认 <kbd>Ctrl Z</kbd></button></div>
+        <span class="small muted">勾选后自动暂存，确认后计入“已分类”</span>
+      </div>
+    </aside>
+  </main>
+  <div id="toast" role="status" aria-live="polite" hidden></div>
+  <details id="responsibilityMatrix"><summary>问题与责任关联</summary><div class="association-panel"><p class="small">按售后单去重，多选责任可同时计入。关联比例用于提示，已有分类不回填。</p><table><thead><tr><th>问题点</th><th>建议责任</th><th>明确责任单数</th><th>已有人工关联</th></tr></thead><tbody id="responsibilityRows"></tbody></table></div></details>
+</body>
+</html>
