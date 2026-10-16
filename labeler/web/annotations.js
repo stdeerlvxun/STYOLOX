@@ -39,6 +39,7 @@
   function problemOrder(){return [...new Set([...(S.tags.defect||[]),...(S.current?.label?.defects||[])])];}
   function defaultProblem(){const existing=S.current?.label?.defects||[];return [selectedBox()?.problem,existing.includes(S.responsibilityProblem)?S.responsibilityProblem:'',existing.includes(A.lastProblem)?A.lastProblem:'',...existing,A.lastProblem,el('boxProblem').value,...problemOrder()].find(name=>problemOrder().includes(name))||'';}
   function standardResponsibilities(problem,box){
+    if(!problem)return [];
     if(box&&Object.hasOwn(box,'responsibilities'))return [...box.responsibilities];
     const label=S.current?.label,mapping=label?.problem_responsibilities;
     if(mapping&&Object.hasOwn(mapping,problem))return [...mapping[problem]];
@@ -51,14 +52,14 @@
   }
   function responsibilityFields(problem){return {responsibilities:standardResponsibilities(problem),...(manualResponsibility(problem)?{responsibility_override:true}:{})};}
   function updatesForBoxes(boxes){
-    const mapping={};for(const box of boxes)if(Object.hasOwn(box,'responsibilities'))mapping[box.problem]=[...new Set([...(mapping[box.problem]||[]),...box.responsibilities])];
+    const mapping={};for(const box of boxes)if(box.problem&&Object.hasOwn(box,'responsibilities'))mapping[box.problem]=[...new Set([...(mapping[box.problem]||[]),...box.responsibilities])];
     const defects=Object.keys(mapping),overrides=[...new Set(boxes.filter(box=>box.responsibility_override===true&&Object.hasOwn(mapping,box.problem)).map(box=>box.problem))];
     return defects.length?{defects,responsibilities:[...new Set(Object.values(mapping).flat())],problem_responsibilities:mapping,...(overrides.length?{responsibility_overrides:overrides}:{})}:null;
   }
   function conflictingRegions(box){return box?A.negativeRegions.filter(region=>overlapRatio(box,region)>=.5):[];}
   function firstConflict(boxes=displayBoxes()){for(const box of boxes){const regions=conflictingRegions(box);if(regions.length)return {box,regions};}return null;}
   function regionName(region){return region.reason==='process_hole'?'工艺孔':region.reason==='normal_structure'?'正常结构':'已删除误报区域';}
-  function conflictMessage(box,regions){return '“'+box.problem+'”与 '+regions.length+' 处'+[...new Set(regions.map(regionName))].join(' / ')+'重叠，请选择保留一项。';}
+  function conflictMessage(box,regions){return '“'+(box.problem||'待选问题点')+'”与 '+regions.length+' 处'+[...new Set(regions.map(regionName))].join(' / ')+'重叠，请选择保留一项。';}
   function showConflict(conflict){
     if(!conflict)return;const {box,regions}=conflict;A.active=true;A.quickFlow=true;A.draw=false;A.selected=box.id;
     if(A.popup?.boxId!==box.id){const rect=stage.getBoundingClientRect(),point=screenPoint(box.x+box.w,box.y+box.h,view());openPopup(box,rect.left+point.x,rect.top+point.y);}
@@ -110,10 +111,10 @@
       current.problem=name;delete current.responsibility_override;Object.assign(current,responsibilityFields(name));A.lastProblem=name;
     });});el('boxEditorProblems').append(button);}
     el('boxEditorResponsibilitySection').hidden=false;
-    el('boxEditorHint').textContent='空格确认此框并继续标下一处 · Enter 保存整张并下一张';
+    el('boxEditorHint').textContent=box.problem?'空格确认此框并继续标下一处 · Enter 保存整张并下一张':'待选问题点：先选择问题，再确认责任；机器仅提供位置建议';
     if(el('boxEditorAutomatic')){el('boxEditorAutomatic').hidden=!automatic;el('boxEditorAutomatic').textContent=automatic?'默认：'+automatic:'';}
     if(el('boxEditorRestoreDefault')){const restore=el('boxEditorRestoreDefault');restore.hidden=!automatic;restore.disabled=S.busy||roles.length===1&&roles[0]===automatic;restore.textContent=restore.disabled&&!S.busy?'已用默认':'恢复默认';}
-    if(el('boxEditorResponsibilityHint'))el('boxEditorResponsibilityHint').textContent=manualResponsibility(box.problem,box)?'已按人工选择，可多选；不确定选待核。':'点击其他责任即可纠正默认责任。';
+    if(el('boxEditorResponsibilityHint'))el('boxEditorResponsibilityHint').textContent=!box.problem?'选择问题点后再确认责任。':manualResponsibility(box.problem,box)?'已按人工选择，可多选；不确定选待核。':'点击其他责任即可纠正默认责任。';
     if(el('boxEditorError')){const message=conflicts.length?conflictMessage(box,conflicts):A.popup?.error||'';el('boxEditorError').textContent=message;el('boxEditorError').hidden=!message;}
     if(el('boxEditorConflictActions'))el('boxEditorConflictActions').hidden=!conflicts.length;
     if(el('boxEditorKeepProblem')){el('boxEditorKeepProblem').disabled=S.busy;el('boxEditorKeepProblem').title='保留这个问题框，撤销它重叠的 '+conflicts.length+' 处记录区域；其他框与分类保留，可撤销';}
@@ -121,7 +122,7 @@
     el('boxEditorResponsibilities').replaceChildren();
     const available=[...new Set([...(S.tags.responsibility||[]),'待核'])],priority=['运输','安装','其他','待核'],later=['生产','原材料'];
     const roleOrder=[...priority.filter(name=>available.includes(name)),...available.filter(name=>!priority.includes(name)&&!later.includes(name)),...available.filter(name=>later.includes(name))];
-    for(const name of roleOrder.filter(name=>name!==automatic)){const button=document.createElement('button');button.type='button';button.textContent=name;button.disabled=S.busy;button.setAttribute('aria-pressed',String(roles.includes(name)));button.addEventListener('click',()=>{editPopup(current=>{
+    for(const name of roleOrder.filter(name=>name!==automatic)){const button=document.createElement('button');button.type='button';button.textContent=name;button.disabled=S.busy||!box.problem;button.setAttribute('aria-pressed',String(roles.includes(name)));button.addEventListener('click',()=>{if(!box.problem)return;editPopup(current=>{
       const currentRoles=standardResponsibilities(current.problem,current),defaultOnly=automatic&&currentRoles.length===1&&currentRoles[0]===automatic;let values=defaultOnly?[]:currentRoles;values=values.includes(name)?values.filter(v=>v!==name):name==='待核'?['待核']:[...values.filter(v=>v!=='待核'),name];current.responsibilities=values;current.responsibility_override=true;
     });});el('boxEditorResponsibilities').append(button);}
     // Keep the action reachable so missing responsibility can produce a useful inline error.
@@ -131,6 +132,7 @@
   function confirmCurrentBox(){
     const box=popupBox();if(!box)return true;
     requireNoConflicts([box]);
+    if(!box.problem){A.popup.error='请先为当前框选择问题点，机器尚未判断问题类型';renderPopup();throw new Error(A.popup.error);}
     const roles=standardResponsibilities(box.problem,box);
     if(!box.problem||!roles.length){A.popup.error='请先为“'+(box.problem||'当前问题')+'”选择责任，拿不准可选待核';renderPopup();throw new Error(A.popup.error);}
     if(box.suggestion||!Object.hasOwn(box,'responsibilities')||JSON.stringify(box.responsibilities)!==JSON.stringify(roles))editPopup(current=>{current.responsibilities=roles;if(manualResponsibility(current.problem,current))current.responsibility_override=true;});
@@ -179,7 +181,7 @@
       svg.append(svgNode('rect',{x,y,width:box.w*rect.width,height:box.h*rect.height,fill:color,
         'fill-opacity':selected?.22:.12,stroke:color,'stroke-width':selected?3.5:2.5,
         'stroke-dasharray':box.suggestion?'6 4':'none','vector-effect':'non-scaling-stroke'}));
-      const roles=standardResponsibilities(box.problem,box);overlayLabel(svg,x,y,(box.suggestion?'机器建议':(index+1))+' · '+box.problem+(roles.length?' · '+roles.join('、'):''));
+      const roles=standardResponsibilities(box.problem,box);overlayLabel(svg,x,y,(box.suggestion?'机器建议':(index+1))+' · '+(box.problem||'待选问题点')+(roles.length?' · '+roles.join('、'):''));
       if(selected&&box.id!=='preview'){
         const size=9/v.zoom;for(const [cx,cy]of [[x,y],[x+box.w*rect.width,y],[x,y+box.h*rect.height],[x+box.w*rect.width,y+box.h*rect.height]])
           svg.append(svgNode('rect',{x:cx-size/2,y:cy-size/2,width:size,height:size,fill:color,stroke:'#ffffff','stroke-width':1.5/v.zoom}));
@@ -194,7 +196,7 @@
     for(const name of S.tags.defect){const option=document.createElement('option');option.value=name;option.textContent=name;el('boxProblem').append(option);}
     el('boxProblem').value=S.tags.defect.includes(chosen)?chosen:(A.review?.missing_problems?.[0]||S.current?.label.defects[0]||S.tags.defect[0]||'');
     el('boxSelect').replaceChildren();const empty=document.createElement('option');empty.value='';empty.textContent='点击图片选框（'+displayBoxes().length+'）';el('boxSelect').append(empty);
-    for(const [i,box]of displayBoxes().entries()){const option=document.createElement('option');option.value=box.id;option.textContent=(box.suggestion?'建议':i+1)+' · '+box.problem;el('boxSelect').append(option);}
+    for(const [i,box]of displayBoxes().entries()){const option=document.createElement('option');option.value=box.id;option.textContent=(box.suggestion?'建议':i+1)+' · '+(box.problem||'待选问题点');el('boxSelect').append(option);}
     el('boxSelect').value=A.selected;el('reviewOutcome').value=A.outcome;
     const blocked=!ready()||S.busy||el('photo').hidden;
     for(const id of ['boxProblem','drawBox','boxSelect','reviewOutcome','confirmAnnotation'])el(id).disabled=blocked;
@@ -210,7 +212,7 @@
     el('adoptAutoBoxes').disabled=blocked||A.rejecting||!current||A.proposal?.status!=='pending'||adopted||!A.proposal?.boxes.length;
     el('adoptAutoBoxes').textContent=adopted?'建议已加入草稿':'保留全部建议';
     el('rejectAutoBoxes').disabled=blocked||A.rejecting||!current||A.proposal?.status!=='pending'||!displayBoxes().some(box=>box.origin==='model');
-    el('autoBoxSummary').textContent=!A.proposal?'':!current?'建议对应的原图或分类已变化，请重新生成建议。':A.documentStatus==='confirmed'&&adopted?'这批建议已完成人工审核。':adopted?'修改已加入草稿；Enter 确认并下一张，确认前不进入训练。':A.proposal.status==='accepted'?'这批建议已完成人工位置确认。':A.proposal.status==='rejected'?'这批机器建议已拒绝，人工分类和补标保留。':'机器建议 · '+A.proposal.boxes.length+' 框；直接点击、拖动或改类，Enter 确认。';
+    el('autoBoxSummary').textContent=!A.proposal?'':!current?'建议对应的原图或分类已变化，请重新生成建议。':A.documentStatus==='confirmed'&&adopted?'这批建议已完成人工审核。':adopted?'修改已加入草稿；Enter 确认并下一张，确认前不进入训练。':A.proposal.status==='accepted'?'这批建议已完成人工位置确认。':A.proposal.status==='rejected'?'这批机器建议已拒绝，人工分类和补标保留。':'机器建议 · '+A.proposal.boxes.length+' 框；'+(A.proposal.boxes.some(box=>!box.problem)?'点击待选框选择问题与责任，再按 Enter 确认。':'直接点击、拖动或改类，Enter 确认。');
     el('annotationStatus').textContent=A.error||A.readOnly?'读取有冲突，原补标保留':A.saveError?'保存未成功，可修改后重试':A.loading?'正在读取补标…':A.saving?'正在保存补标…':A.dirty?'改动待暂存':A.documentStatus==='confirmed'?'人工已确认 · v'+A.version:A.version?'草稿已暂存 · 尚未确认':'尚未保存位置补标';
     el('annotationFeedbackStatus').textContent=Number.isFinite(A.feedback?.confirmed_corrections)?A.feedback.confirmed_corrections+' 份纠错已确认 · 用于批次训练':'纠错在确认后纳入后续批次训练';
     el('annotationStatus').title=A.negativeRegions.length?'已记录 '+A.negativeRegions.length+' 处局部误报；不改变整图分类。':'';
@@ -260,6 +262,8 @@
     if(A.drag)throw new Error('请先松开鼠标完成当前框选，再保存整张图片');
     requireNoConflicts(A.outcome==='boxed'?displayBoxes():A.boxes);
     confirmCurrentBox();
+    const unassigned=(A.outcome==='boxed'?displayBoxes():A.boxes).find(box=>!box.problem);
+    if(unassigned){A.active=true;A.quickFlow=true;A.draw=false;A.selected=unassigned.id;openPopup(unassigned,stage.getBoundingClientRect().left+20,stage.getBoundingClientRect().top+20);A.popup.error='请先为当前框选择问题点，机器尚未判断问题类型';render();throw new Error(A.popup.error);}
     if(A.outcome==='boxed'&&suggestionBoxes().length)change(()=>{},true);
     if(A.outcome==='boxed'&&!A.boxes.length&&A.negativeRegions.length)A.outcome='needs_correction';
     if(A.outcome==='boxed'&&!A.boxes.length)throw new Error('尚未框选问题位置；只复核分类请使用底部“图片状态 / 分类”，或先选择其他复核结果。');

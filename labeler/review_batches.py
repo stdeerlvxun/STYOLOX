@@ -144,6 +144,46 @@ class ReviewBatches:
         result['comparison']['disposition_scope']=result['disposition_scope']
         return result,None
 
+    def _classification_review(self,item,proposal,root_id):
+        """A later explicit error-review commit closes work, not box-accuracy truth."""
+        reviews=self.store.query("SELECT run_id,reviewed_at FROM error_reviews WHERE image_id=? AND status='reviewed'",
+            (item['image_id'],))
+        if not reviews:return None,None
+        if self.store.one('SELECT image_id FROM drafts WHERE image_id=?',(item['image_id'],)):
+            return None,'classification_draft'
+        label=self.store.one('SELECT * FROM labels WHERE image_id=?',(item['image_id'],))
+        created=self._timestamp(proposal['created_at']);updated=self._timestamp(label['updated_at']) if label else None
+        if not created or not updated or updated<=created:return None,'classification_review_confirmation_missing'
+        classification=json.loads(label['data']);receipt=None;review_run=None
+        reviewed={r['run_id']:self._timestamp(r['reviewed_at']) for r in reviews}
+        histories=self.store.query('SELECT * FROM history WHERE root_id=? AND undone=0 AND created_at>=? ORDER BY id DESC',
+            (root_id,proposal['created_at'][:19]))
+        for history in histories:
+            stamp=self._timestamp(history['created_at'])
+            if history['kind'] not in ('commit','batch') or stamp!=updated or stamp<=created:continue
+            for change in json.loads(history['data']):
+                run=(change.get('error_review_before') or {}).get('run_id')
+                if (change.get('id')==item['image_id'] and change.get('after')==classification
+                    and run in reviewed and reviewed[run]==stamp):
+                    receipt=history;review_run=run;break
+            if receipt:break
+        if not receipt:return None,'classification_review_confirmation_missing'
+        annotation=self.store.one('SELECT * FROM annotation_documents WHERE image_id=?',(item['image_id'],))
+        if annotation and json.loads(annotation['data']).get('status')!='confirmed':
+            annotation_time=self._timestamp(annotation['updated_at'])
+            if not annotation_time or annotation_time>updated:return None,'annotation_draft'
+        problem=self._source_issue(item)
+        if problem:return None,problem
+        result={'image_id':item['image_id'],'relative_path':item['relative_path'],'proposal_id':item['proposal_id'],
+            'decision':'classification_reviewed','reviewed_at':receipt['created_at'],
+            'manual_history_id':receipt['id'],'review_run':review_run,'classification':classification,
+            'annotation':None,'annotation_version':None,'final_boxes':[],'negative_regions':[],
+            'source':json.loads(item['proposal_data'])['source'],'non_training':True,
+            'disposition_scope':'explicit_human_classification_review_not_box_accuracy_truth'}
+        result['comparison']=compare_review(json.loads(item['proposal_data']).get('boxes',[]),[],[])
+        result['comparison']['disposition_scope']=result['disposition_scope']
+        return result,None
+
     def _reviewed(self,item,root_id):
         proposal=self._proposal(item['proposal_id'],root_id)
         if not proposal:return None,'missing_proposal'
@@ -154,6 +194,8 @@ class ReviewBatches:
         terminal,terminal_reason=self._terminal_state_review(item,proposal,root_id)
         if terminal or terminal_reason:return terminal,terminal_reason
         if proposal['status'] not in ('accepted','rejected') or not proposal.get('reviewed_at'):
+            classification,classification_reason=self._classification_review(item,proposal,root_id)
+            if classification or classification_reason:return classification,classification_reason
             current=self.store.one('SELECT proposal_id FROM annotation_proposals WHERE image_id=?',(item['image_id'],))
             return None,'superseded_proposal' if current and current['proposal_id']!=item['proposal_id'] else 'pending_review'
         source=json.loads(item['proposal_data'])['source']
@@ -162,7 +204,7 @@ class ReviewBatches:
         if self.store.one('SELECT image_id FROM drafts WHERE image_id=?',(item['image_id'],)):
             return None,'classification_draft'
         label=self.store.one('SELECT data FROM labels WHERE image_id=?',(item['image_id'],))
-        if not label:return None,'classification_missing'
+        if not label and proposal['status']=='accepted':return None,'classification_missing'
         annotation=self.store.one('SELECT * FROM annotation_documents WHERE image_id=?',(item['image_id'],))
         document=json.loads(annotation['data']) if annotation else None
         if document and document.get('status')!='confirmed':return None,'annotation_draft'
@@ -175,11 +217,12 @@ class ReviewBatches:
                 return None,'annotation_source_changed'
         result={'image_id':item['image_id'],'relative_path':item['relative_path'],'proposal_id':item['proposal_id'],
             'decision':proposal['status'],'reviewed_at':proposal['reviewed_at'],
-            'classification':json.loads(label['data']),'annotation':document,
+            'classification':json.loads(label['data']) if label else None,'annotation':document,
             'annotation_version':annotation['version'] if annotation else None,
             'final_boxes':document.get('boxes',[]) if document else [],
             'negative_regions':document.get('negative_regions',[]) if document else [],
             'source':source}
+        if not label:result['non_training']=True
         result['comparison']=compare_review(json.loads(item['proposal_data']).get('boxes',[]),result['final_boxes'],result['negative_regions'])
         return result,None
 
@@ -192,6 +235,7 @@ class ReviewBatches:
             'archived_at':batch['completed_at'],
             'metadata':json.loads(batch['metadata']),'total':len(items),'reviewed':reviewed,
             'accepted':counts['accepted'],'rejected':counts['rejected'],
+            **({'classification_reviewed':counts['classification_reviewed']} if counts['classification_reviewed'] else {}),
             'state_processed':sum(counts['state_'+s] for s in ('normal','unrelated','unclear')),
             'state_counts':{s:counts['state_'+s] for s in ('normal','unrelated','unclear')},
             'remaining':len(items)-reviewed,'pending':len(items)-reviewed-sum(reasons.values()),
@@ -219,14 +263,18 @@ class ReviewBatches:
                 if items and len(results)==len(items):
                     stamp=_now();counts=Counter(r['decision'] for r in results)
                     state_counts={s:counts['state_'+s] for s in ('normal','unrelated','unclear')}
-                    comparison=summarize_comparisons([r for r in results if not r['decision'].startswith('state_')])
+                    comparison=summarize_comparisons([r for r in results if r['decision'] in ('accepted','rejected')])
                     comparison['image_state_dispositions']={'counts':state_counts,
                         'excluded_from_location_comparison':True,
                         'scope':'human_image_state_decisions_not_local_false_positive_truth'}
+                    if counts['classification_reviewed']:
+                        comparison['classification_review_dispositions']={'count':counts['classification_reviewed'],
+                            'excluded_from_location_comparison':True,'scope':'human_classification_review_not_box_accuracy_truth'}
                     archive={'schema_version':1,'type':'human_review_batch_archive','batch_id':batch['batch_id'],
                         'created_at':batch['created_at'],'completed_at':stamp,'metadata':json.loads(batch['metadata']),
                         'source_images_copied':False,'source_images_modified':False,
                         'summary':{'total':len(results),'reviewed':len(results),'accepted':counts['accepted'],
+                            **({'classification_reviewed':counts['classification_reviewed']} if counts['classification_reviewed'] else {}),
                             'rejected':counts['rejected'],'state_processed':sum(counts['state_'+s] for s in ('normal','unrelated','unclear')),
                             'state_counts':state_counts,
                             'final_boxes':sum(len(r['final_boxes']) for r in results)},

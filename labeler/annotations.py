@@ -54,7 +54,7 @@ def correction_events(proposal, boxes, regions):
                            'reason':negative.get(identity,{}).get('reason','not_confirmed_as_defect')})
             continue
         changes=[]
-        if current['problem']!=box['problem']:changes.append('reclassified')
+        if current['problem']!=box['problem']:changes.append('reclassified' if box['problem'] else 'assigned_problem')
         if any(abs(current[k]-box[k])>1e-6 for k in ('x','y','w','h')):changes.append('moved')
         result.append({'kind':'corrected' if changes else 'accepted','source_box_id':identity,
                        'changes':changes,'before':box,'after':current})
@@ -96,14 +96,27 @@ class Annotations:
 
     def proposal_match(self, alias='p', include_annotations=False):
         # Raw classification identity and file version invalidate stale suggestions without hashing all NAS files.
-        condition=(f"{alias}.status='pending' AND {alias}.label_data=l.data AND d.image_id IS NULL AND i.available=1 "
+        condition=(f"{alias}.status='pending' AND {alias}.label_data=COALESCE(l.data,'') AND d.image_id IS NULL AND i.available=1 "
             "AND COALESCE(json_extract(l.data,'$.image_state'),'') IN ('','defect') "
-            "AND json_array_length(json_extract(l.data,'$.defects'))>0 "
+            "AND NOT EXISTS (SELECT 1 FROM annotation_history ah WHERE ah.image_id=i.id AND json_extract(ah.after_data,'$.status')='confirmed') "
+            "AND NOT EXISTS (SELECT 1 FROM annotation_feedback af WHERE af.image_id=i.id AND json_extract(af.data,'$.status')='confirmed') "
+            "AND NOT EXISTS (SELECT 1 FROM error_reviews er WHERE er.image_id=i.id AND er.status='reviewed') "
+            "AND NOT EXISTS (SELECT 1 FROM annotation_proposal_history ph WHERE ph.image_id=i.id AND ph.status IN ('accepted','rejected')) "
             f"AND i.size=json_extract({alias}.data,'$.source.size') AND i.mtime_ns=json_extract({alias}.data,'$.source.mtime_ns') ")
         if not include_annotations:
             condition+=("AND NOT EXISTS (SELECT 1 FROM annotation_documents a WHERE a.image_id=i.id AND "
                 f"(json_extract(a.data,'$.status')='confirmed' OR COALESCE(json_extract(a.data,'$.proposal_id'),'')!={alias}.proposal_id))")
         return condition
+
+    def _has_human_review(self, image_id):
+        """A model version must never reopen a person's completed review or old position work."""
+        queries=(
+            'SELECT 1 FROM annotation_history WHERE image_id=? LIMIT 1',
+            "SELECT 1 FROM annotation_feedback WHERE image_id=? AND json_extract(data,'$.status')='confirmed' LIMIT 1",
+            "SELECT 1 FROM error_reviews WHERE image_id=? AND status='reviewed' LIMIT 1",
+            "SELECT 1 FROM annotation_proposal_history WHERE image_id=? AND status IN ('accepted','rejected') LIMIT 1",
+        )
+        return any(self.store.one(query,(image_id,)) for query in queries)
 
     def proposal_state(self):
         root=self.store.current_root()['id']
@@ -153,11 +166,13 @@ class Annotations:
                 if image['relative_path']!=item['relative_path']:raise ValueError('原图路径不一致')
                 label=self.store.one('SELECT data FROM labels WHERE image_id=?',(image_id,))
                 value=json.loads(label['data']) if label else {}
-                if (not label or value.get('image_state','') not in ('','defect') or not value.get('defects')
+                if (value.get('image_state','') not in ('','defect')
                     or self.store.one('SELECT image_id FROM drafts WHERE image_id=?',(image_id,))
-                    or self.store.one('SELECT image_id FROM annotation_documents WHERE image_id=?',(image_id,))):
+                    or self.store.one('SELECT image_id FROM annotation_documents WHERE image_id=?',(image_id,))
+                    or self._has_human_review(image_id)):
                     raise ValueError('已有人工编辑或图片状态，保留原数据')
-                if item['label_fingerprint']!=fingerprint(label['data']):raise ValueError('人工分类已变化')
+                label_raw=label['data'] if label else ''
+                if item['label_fingerprint']!=fingerprint(label_raw):raise ValueError('人工分类已变化')
                 source=self.source(image_id)
                 if any(item['source'][k]!=source[k] for k in ('sha256','width','height')):
                     raise ValueError('自动框原图不一致')
@@ -168,7 +183,8 @@ class Annotations:
                 for box in boxes:
                     identity=box.get('id');problem=box.get('problem');values=[box.get(k) for k in ('x','y','w','h')]
                     if (box.get('origin')!='model' or not isinstance(identity,str) or not identity or len(identity)>80 or identity in box_ids
-                        or problem not in value['defects'] or problem not in self.store.tags()['defect']):
+                        or not isinstance(problem,str)
+                        or (problem!='' and (problem not in value.get('defects',[]) or problem not in self.store.tags()['defect']))):
                         raise ValueError('框类型或标识不正确')
                     if any(type(v) not in (int,float) or not math.isfinite(v) for v in values):raise ValueError('框坐标不正确')
                     x,y,w,h=values
@@ -184,7 +200,7 @@ class Annotations:
                       'coordinate_space':'exif_transposed_normalized_xywh','requires_human_review':True}
                 identity=fingerprint(json.dumps(data,sort_keys=True,ensure_ascii=False))[:32]
                 for box in clean:box['proposal_id']=identity
-                prepared.append((image_id,identity,data,label['data'],replaces))
+                prepared.append((image_id,identity,data,label_raw,replaces))
             except (ValueError,KeyError,TypeError,OSError):
                 skipped+=1
         imported=0;refreshed=0;withdrawn=0;imported_ids=[];imported_images=[]
@@ -194,9 +210,10 @@ class Annotations:
             before=digest(self.store.db);annotations_before=annotation_digest(self.store.db)
             for image_id,identity,data,label_raw,replaces in prepared:
                 current=self.store.one('SELECT data FROM labels WHERE image_id=?',(image_id,))
-                if (not current or current['data']!=label_raw
+                if ((current['data'] if current else '')!=label_raw
                     or self.store.one('SELECT image_id FROM drafts WHERE image_id=?',(image_id,))
-                    or self.store.one('SELECT image_id FROM annotation_documents WHERE image_id=?',(image_id,))):
+                    or self.store.one('SELECT image_id FROM annotation_documents WHERE image_id=?',(image_id,))
+                    or self._has_human_review(image_id)):
                     skipped+=1;continue
                 old=self.store.one('SELECT * FROM annotation_proposals WHERE image_id=?',(image_id,))
                 if old:
@@ -289,7 +306,7 @@ class Annotations:
         if not isinstance(mapping,dict) or any(p not in problems for p in mapping):
             raise ValueError('问题点责任格式不正确')
         mapping={p:self._box_roles(v) for p,v in mapping.items()}
-        requested=list(dict.fromkeys(problems+[b['problem'] for b in boxes]))
+        requested=list(dict.fromkeys(problems+[b['problem'] for b in boxes if b['problem']]))
         overrides=updates.get('responsibility_overrides',[])
         if (not isinstance(overrides,list) or len(overrides)>40 or
             any(not isinstance(p,str) or p not in requested for p in overrides)):
@@ -326,6 +343,9 @@ class Annotations:
         box_mapping={}
         for box in boxes:
             problem=box['problem'];old=old_boxes.get(box['id'],{})
+            if not problem:
+                box['responsibilities']=[]
+                continue
             roles=box.get('responsibilities',mapping.get(problem))
             if roles is None and old.get('problem')==problem:roles=old.get('responsibilities')
             if roles is None:roles=resolved.get(problem,[])
@@ -371,7 +391,8 @@ class Annotations:
             identity,problem = box.get('id'),box.get('problem')
             if not isinstance(identity,str) or not identity or len(identity)>80 or identity in identities:
                 raise ValueError('问题框标识不正确')
-            if problem not in known:raise ValueError('请为问题框选择已有问题点')
+            if problem not in known and not (status=='draft' and problem==''):
+                raise ValueError('请为问题框选择已有问题点')
             values=[box.get(k) for k in ('x','y','w','h')]
             if any(type(v) not in (int,float) or not math.isfinite(v) for v in values):raise ValueError('框坐标不正确')
             x,y,w,h=values
@@ -413,6 +434,14 @@ class Annotations:
                         data=json.loads(accepted['data'])
                         if data['source']['sha256']==source['sha256']:proposal={**data,'proposal_id':proposal_id}
                 if not proposal or proposal['proposal_id']!=proposal_id:raise ValueError('自动框建议已变化或已审核，请重新读取')
+                original_boxes={box['id']:box for box in proposal['boxes']}
+                for box in clean:
+                    if box['problem']=='' and box.get('origin')=='model':
+                        original=original_boxes.get(box.get('source_box_id',box['id']))
+                        if not original or original['problem']!='':raise ValueError('待选问题框来源不正确')
+                if (status=='confirmed' and clean and any(box['problem']=='' for box in proposal['boxes'])
+                    and 'classification_updates' not in body):
+                    raise ValueError('请为待选问题框选择问题点和责任后确认')
                 if previous and previous.get('proposal_id')!=proposal_id:
                     current_boxes={box['id']:box for box in clean}
                     if any(current_boxes.get(box['id'])!=box for box in previous['boxes']):

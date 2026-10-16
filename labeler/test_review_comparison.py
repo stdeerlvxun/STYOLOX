@@ -25,4 +25,10 @@ class ComparisonTest(unittest.TestCase):
         self.assertIsNone(summary['location_recall_on_reviewed_examples'])
         self.assertEqual(summary['removed_machine_boxes'],1)
 
+    def test_human_assigning_unknown_type_is_not_model_type_error(self):
+        result=compare_review([box('p1',problem='')],[box('p1',problem='崩边')])
+        self.assertEqual(result['problem_type_changed'],0)
+        self.assertEqual(result['problem_type_assigned'],1)
+        self.assertEqual(summarize_comparisons([{'comparison':result}])['problem_type_assigned'],1)
+
 if __name__=='__main__':unittest.main()

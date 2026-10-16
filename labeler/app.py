@@ -714,6 +714,8 @@ class Application:
             self.store.set_root(self.paths.server(initial_root or DEFAULT_ROOT))
         from review_batches import ReviewBatches
         self.review_batches = ReviewBatches(self.store)
+        from review_quality import ReviewQuality
+        self.review_quality = ReviewQuality(self.store)
         self.review_batches.register('legacy-'+dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'),
                                      metadata={'source':'existing_pending'})
         self.scanner = Scanner(self.store)
@@ -924,6 +926,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(self.app.store.annotations.proposal_state())
             if path == '/api/review-batches/state':
                 return self.send(self.app.review_state())
+            if path == '/api/review-quality/state':
+                return self.send(self.app.review_quality.state())
             if path == '/api/review-batches/archive':
                 content=self.app.review_batches.archive_content(params.get('batch',[''])[0])
                 return self.send(content.encode('utf-8'),headers={'Content-Disposition':'attachment; filename="review-archive.json"'})

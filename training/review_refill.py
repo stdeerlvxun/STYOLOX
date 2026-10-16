@@ -19,6 +19,8 @@ import uuid
 
 import correction_cycle as worker
 
+SELECTION_POLICY = 'all_unreviewed_images_v2'
+
 
 def settings(config):
     result = {'enabled': config.get('review_refill_enabled', False),
@@ -59,42 +61,58 @@ def api(config, path, body=None):
 
 
 def select_refill_rows(snapshot):
-    """Same positive-image policy as select_images; additionally preserve every proposal."""
+    """Suggest locations on all unreviewed images without changing training eligibility."""
     db = sqlite3.connect(Path(snapshot).resolve().as_uri()+'?mode=ro', uri=True)
     db.row_factory = sqlite3.Row
     try:
         root = int(db.execute("SELECT value FROM settings WHERE key='root'").fetchone()[0])
         rows = db.execute('SELECT i.id image_id,i.relative_path,i.sha256,i.reported_at,i.size,i.mtime_ns,'
             'i.available,l.data,d.image_id IS NOT NULL has_draft,a.image_id IS NOT NULL has_annotation,'
-            'p.image_id IS NOT NULL has_proposal FROM images i JOIN labels l ON l.image_id=i.id '
+            'p.image_id IS NOT NULL has_proposal,'
+            'EXISTS(SELECT 1 FROM annotation_history h WHERE h.image_id=i.id) has_annotation_history,'
+            'EXISTS(SELECT 1 FROM annotation_feedback f WHERE f.image_id=i.id) has_feedback,'
+            'EXISTS(SELECT 1 FROM annotation_proposal_history h WHERE h.image_id=i.id) has_proposal_history,'
+            "EXISTS(SELECT 1 FROM error_reviews e WHERE e.image_id=i.id AND e.status='reviewed') has_error_review,"
+            "EXISTS(SELECT 1 FROM model_reviews m WHERE m.image_id=i.id AND m.decision='unrelated' AND m.status='accepted') has_unrelated_review "
+            'FROM images i LEFT JOIN labels l ON l.image_id=i.id '
             'LEFT JOIN drafts d ON d.image_id=i.id LEFT JOIN annotation_documents a ON a.image_id=i.id '
             'LEFT JOIN annotation_proposals p ON p.image_id=i.id WHERE i.root_id=? '
             'ORDER BY i.reported_at DESC,i.relative_path DESC,i.id DESC', (root,)).fetchall()
         selected, excluded = [], Counter()
         for record in rows:
-            row = dict(record); raw = row.pop('data'); label = json.loads(raw)
+            row = dict(record); raw = row.pop('data') or ''; label = json.loads(raw) if raw else {}
             reason = ('image_state_selected' if label.get('image_state', '') not in ('', 'defect')
-                else 'missing_problem_labels' if not label.get('defects')
+                else 'confirmed_unrelated_review' if row['has_unrelated_review']
                 else 'unconfirmed_edit' if row['has_draft']
-                else 'existing_human_annotation' if row['has_annotation']
-                else 'existing_machine_proposal' if row['has_proposal']
+                else 'existing_human_annotation' if row['has_annotation'] or row['has_annotation_history'] or row['has_feedback']
+                else 'existing_human_error_review' if row['has_error_review']
+                else 'existing_machine_proposal' if row['has_proposal'] or row['has_proposal_history']
                 else 'source_unavailable' if not row['available'] else '')
             if reason:
                 excluded[reason] += 1; continue
-            row.update(problems=list(dict.fromkeys(label['defects'])),
+            row.update(problems=list(dict.fromkeys(label.get('defects', []))),
                        label_fingerprint=hashlib.sha256(raw.encode()).hexdigest(), root_id=root)
             selected.append(row)
-        return selected, {'confirmed_images_in_root': len(rows), 'eligible_images': len(selected),
+        return selected, {'images_in_root': len(rows), 'eligible_images': len(selected),
+                          'selection_policy': SELECTION_POLICY,
                           'excluded': dict(excluded)}
     finally:
         db.close()
 
 
 def attempt_key(model_sha, row, source_root):
-    identity = [model_sha, row['image_id'], row['label_fingerprint'], str(source_root),
+    identity = [SELECTION_POLICY, model_sha, row['image_id'], row['label_fingerprint'], str(source_root),
                 row.get('root_id'), row['relative_path'], row.get('sha256'),
                 row.get('size'), row.get('mtime_ns')]
     return hashlib.sha256(json.dumps(identity, ensure_ascii=False).encode()).hexdigest()
+
+
+def normalize_location_predictions(predictions, problems, max_boxes=10):
+    """Unknown issue names remain blank until a human chooses them; geometry is reusable."""
+    from generate_detector_proposals import normalize_predictions
+    names = set(problems)
+    context = next(iter(names)) if len(names) == 1 else ''
+    return normalize_predictions(predictions, {context}, max_boxes=max_boxes, class_agnostic=True)
 
 
 def safe_source_path(root, relative):
@@ -110,7 +128,6 @@ def safe_source_path(root, relative):
 
 def generate(config, snapshot, output, attempts_path, model=None):
     from PIL import Image, ImageOps
-    from generate_detector_proposals import normalize_predictions
     policy = settings(config); run = Path(config['current_detector_run']); output = Path(output)
     if output.exists():
         raise ValueError('Refill manifest already exists')
@@ -121,8 +138,9 @@ def generate(config, snapshot, output, attempts_path, model=None):
     state = worker.read_json(attempts_path) if Path(attempts_path).exists() else {}
     attempts = state.get('attempts', {}) if state.get('model_sha256') == model_sha else {}
     rows, selection = select_refill_rows(snapshot)
-    location_first = policy['location_first']
-    supported = [row for row in rows if not location_first or len(row['problems']) == 1]
+    # Refill always supplies review-only locations; a detector class is not a
+    # substitute for the user's issue choice on an unclassified/multi-issue image.
+    location_first = True
     now = time.time()
     def untried(row):
         entry = attempts.get(attempt_key(model_sha, row, config['source_root']))
@@ -130,13 +148,14 @@ def generate(config, snapshot, output, attempts_path, model=None):
         # imported manifest may safely be retried after an interrupted process.
         return (not entry or entry.get('status') == 'proposed'
                 or entry.get('status') == 'error' and entry.get('retry_after', 0) <= now)
-    candidates = [row for row in supported if untried(row)]
+    candidates = [row for row in rows if untried(row)]
     result = {'schema_version': 1, 'model_id': ('yolox-location-' if location_first else 'yolox-human-boxes-')+model_sha[:12],
         'method': 'yolox_problem_location_v2' if location_first else 'yolox_supervised_human_boxes_v1',
         'source_checkpoint_sha256': model_sha, 'source_snapshot_sha256': file_hash(snapshot),
         'requires_human_review': True, 'unreviewed_proposals_training_eligible': False,
         'refresh_pending': False, 'classification_results_modified': False, 'source_images_modified': False,
         'coordinate_space': 'exif_transposed_normalized_xywh', 'location_first_suggestions': location_first,
+        'selection_policy': SELECTION_POLICY, 'problem_name_source': 'single_human_label_or_human_assignment',
         'created_at': dt.datetime.now(dt.timezone.utc).isoformat(), 'selection': selection, 'items': [], 'errors': []}
     if candidates and model is None:
         from train_detector import load_detector
@@ -159,14 +178,13 @@ def generate(config, snapshot, output, attempts_path, model=None):
                 image = ImageOps.exif_transpose(opened).convert('RGB')
             cutoff = config.get('fixed_threshold')
             predictions = model.predict_image(image, **({'threshold': cutoff} if cutoff is not None else {}))
-            boxes = normalize_predictions(predictions, set(row['problems']),
-                class_agnostic=location_first or bool(getattr(model, 'class_agnostic', False)))
+            boxes = normalize_location_predictions(predictions, row['problems'])
             entry.update(status='proposed' if boxes else 'no_boxes', source_sha256=sha)
             if boxes:
                 result['items'].append({'image_id': row['image_id'], 'relative_path': row['relative_path'],
                     'label_fingerprint': row['label_fingerprint'],
                     'source': {'sha256': sha, 'width': image.width, 'height': image.height}, 'boxes': boxes,
-                    'note': '模型仅建议问题位置；问题名称沿用已有人工分类。请逐框审核，已有分类保留。'})
+                    'note': '模型仅建议问题位置；唯一人工问题可沿用，未分类或多个问题时请逐框选择问题点。已有分类保留。'})
             else:
                 empty += 1
         except (OSError, ValueError, KeyError) as error:
@@ -175,13 +193,13 @@ def generate(config, snapshot, output, attempts_path, model=None):
         attempts[key] = entry
     if file_hash(run/'detector.pt') != model_sha:
         raise ValueError('Detector checkpoint changed during inference')
-    result['summary'] = {'eligible_images': len(rows), 'eligible_for_current_model': len(supported),
-        'already_attempted_images': len(supported)-len(candidates), 'attempted_images': processed,
+    result['summary'] = {'eligible_images': len(rows), 'eligible_for_current_model': len(rows),
+        'already_attempted_images': len(rows)-len(candidates), 'attempted_images': processed,
         'remaining_eligible_images': max(0, len(candidates)-processed), 'generated_images': len(result['items']),
         'generated_boxes': sum(len(item['boxes']) for item in result['items']), 'images_without_boxes': empty,
         'errors': len(result['errors']), 'scan_limit': policy['scan_limit'], 'batch_size': policy['batch_size']}
     worker.atomic_json(output, result)
-    worker.atomic_json(attempts_path, {'model_sha256': model_sha, 'attempts': attempts})
+    worker.atomic_json(attempts_path, {'model_sha256': model_sha, 'selection_policy': SELECTION_POLICY, 'attempts': attempts})
     return result
 
 

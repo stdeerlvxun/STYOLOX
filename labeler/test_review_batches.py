@@ -256,5 +256,70 @@ class ReviewBatchTest(unittest.TestCase):
         self.batches.sync();self.assertEqual(self.batches.state()['current']['blocked_reasons'],{'stale_proposal':1})
         self.assertEqual(self.batches.state()['archives_count'],0)
 
+    def classification_review(self,image_id):
+        with self.store.db:
+            self.store.db.execute("UPDATE annotation_proposals SET created_at='2000-01-01T00:00:00+00:00' WHERE image_id=?",(image_id,))
+            self.store.db.execute("INSERT OR REPLACE INTO settings VALUES('error_review_run','classification-run')")
+            self.store.db.execute("INSERT INTO error_reviews(image_id,run_id,data,status) VALUES(?,'classification-run','{}','pending')",(image_id,))
+        with patch('app.now',return_value='2026-10-16T12:00:00+00:00'):
+            self.store.commit([(image_id,self.label)],review_run='classification-run')
+        return self.store.one('SELECT * FROM history ORDER BY id DESC LIMIT 1')
+
+    def test_explicit_classification_review_closes_batch_without_claiming_boxes_correct(self):
+        self.batches.register('classification-one',[self.proposal(self.first)['proposal_id']])
+        self.accept(self.first,status='draft')
+        with self.store.db:
+            self.store.db.execute("UPDATE annotation_documents SET updated_at='2001-01-01T00:00:00+00:00' WHERE image_id=?",(self.first,))
+        receipt=self.classification_review(self.first);before=self.protected()
+        self.assertEqual(self.store.annotations.proposal_state()['pending'],1)  # Only the second image remains.
+        self.batches.sync();archive=json.loads(self.batches.archive_content('classification-one'));item=archive['items'][0]
+        self.assertEqual(archive['summary']['classification_reviewed'],1)
+        self.assertEqual(archive['summary']['reviewed'],1)
+        self.assertEqual(item['decision'],'classification_reviewed')
+        self.assertEqual(item['manual_history_id'],receipt['id'])
+        self.assertEqual(item['classification'],self.label)
+        self.assertEqual(item['final_boxes'],[]);self.assertIsNone(item['annotation']);self.assertTrue(item['non_training'])
+        self.assertEqual(archive['comparison']['reviewed_images'],0)
+        self.assertEqual(archive['comparison']['classification_review_dispositions']['count'],1)
+        self.assertEqual(self.batches.state()['recent_archives'][0]['classification_reviewed'],1)
+        self.assertEqual(self.protected(),before)
+        self.assertEqual(self.proposal(self.first)['status'],'pending')
+
+    def test_classification_review_requires_exact_unundone_receipt_and_matching_run(self):
+        self.batches.register('classification-one',[self.proposal(self.first)['proposal_id']])
+        receipt=self.classification_review(self.first)
+        for mutation in ('undone','wrong_run','changed_label','changed_time','old_review','no_review'):
+            with self.subTest(mutation=mutation):
+                with self.store.db:
+                    self.store.db.execute('UPDATE history SET undone=0,data=? WHERE id=?',(receipt['data'],receipt['id']))
+                    self.store.db.execute('UPDATE labels SET updated_at=? WHERE image_id=?',(receipt['created_at'],self.first))
+                    self.store.db.execute("UPDATE annotation_proposals SET created_at='2000-01-01T00:00:00+00:00' WHERE image_id=?",(self.first,))
+                    self.store.db.execute("UPDATE error_reviews SET status='reviewed',reviewed_at=? WHERE image_id=?",(receipt['created_at'],self.first))
+                    if mutation=='undone':self.store.db.execute('UPDATE history SET undone=1 WHERE id=?',(receipt['id'],))
+                    elif mutation in ('wrong_run','changed_label'):
+                        changes=json.loads(receipt['data'])
+                        if mutation=='wrong_run':changes[0]['error_review_before']['run_id']='different-run'
+                        else:changes[0]['after']['note']='different current label'
+                        self.store.db.execute('UPDATE history SET data=? WHERE id=?',(json.dumps(changes),receipt['id']))
+                    elif mutation=='changed_time':self.store.db.execute("UPDATE labels SET updated_at='2999-01-01T00:00:00+00:00' WHERE image_id=?",(self.first,))
+                    elif mutation=='old_review':self.store.db.execute('UPDATE annotation_proposals SET created_at=? WHERE image_id=?',(receipt['created_at'],self.first))
+                    else:self.store.db.execute("UPDATE error_reviews SET status='pending' WHERE image_id=?",(self.first,))
+                self.batches.sync();self.assertEqual(self.batches.state()['archives_count'],0)
+                self.assertEqual(self.batches.state()['current']['reviewed'],0)
+
+    def test_classification_review_preserves_new_drafts_and_unavailable_sources(self):
+        self.batches.register('classification-one',[self.proposal(self.first)['proposal_id']])
+        self.accept(self.first,status='draft');self.classification_review(self.first)
+        with self.store.db:self.store.db.execute("UPDATE annotation_documents SET updated_at='2999-01-01T00:00:00+00:00' WHERE image_id=?",(self.first,))
+        self.batches.sync();self.assertEqual(self.batches.state()['current']['blocked_reasons'],{'annotation_draft':1})
+        self.store.save_draft(self.first,{**self.label,'note':'new unconfirmed edit'})
+        self.batches.sync();self.assertEqual(self.batches.state()['current']['blocked_reasons'],{'classification_draft':1})
+        with self.store.db:
+            self.store.db.execute('DELETE FROM drafts WHERE image_id=?',(self.first,))
+            self.store.db.execute("UPDATE annotation_documents SET updated_at='2001-01-01T00:00:00+00:00' WHERE image_id=?",(self.first,))
+            self.store.db.execute('UPDATE images SET available=0 WHERE id=?',(self.first,))
+        self.batches.sync();self.assertEqual(self.batches.state()['current']['blocked_reasons'],{'source_unavailable':1})
+        self.assertEqual(self.batches.state()['archives_count'],0)
+
 
 if __name__=='__main__':unittest.main()

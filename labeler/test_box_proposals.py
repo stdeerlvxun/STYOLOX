@@ -1,5 +1,6 @@
 """Machine location suggestions remain separate until explicit human confirmation."""
 import copy
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -224,7 +225,7 @@ class BoxProposalTest(unittest.TestCase):
                 self.assertEqual(self.store.annotations.export()['items'], [])
                 self.assert_no_pending()
 
-    def test_image_states_and_missing_labels_are_excluded(self):
+    def test_image_states_and_unclassified_named_predictions_are_excluded(self):
         for state in ['normal', 'unclear', 'unrelated']:
             self.store.commit([(self.id, {'defects': [], 'image_state': state})])
             result = self.store.annotations.install_proposals(self.manifest())
@@ -234,6 +235,121 @@ class BoxProposalTest(unittest.TestCase):
             self.store.db.execute('DELETE FROM labels WHERE image_id=?', (self.id,))
         result = self.store.annotations.install_proposals(self.manifest())
         self.assertEqual(result['imported'], 0)
+        self.assert_no_pending()
+
+    def install_unknown(self, multi_problem=False):
+        self.id=self.add_image('unclassified.jpg')
+        if multi_problem:
+            self.store.commit([(self.id,{**self.label,'defects':['其他破损','崩边']})])
+        manifest=self.manifest();manifest['items'][0]['boxes'][0]['problem']=''
+        before=self.human(),self.annotations()
+        result=self.store.annotations.install_proposals(manifest)
+        self.assertEqual(result['imported'],1)
+        self.assertEqual((self.human(),self.annotations()),before)
+        proposal=self.store.annotations.detail(self.id)['proposal']
+        self.assertEqual(proposal['boxes'][0]['problem'],'')
+        return proposal,manifest
+
+    def test_unclassified_unknown_proposal_is_visible_and_not_training_data(self):
+        self.install_unknown()
+        self.assertEqual(self.store.listing({'status':['auto_boxes']})['total'],1)
+        self.assertEqual(self.store.annotations.proposal_state()['pending'],1)
+        self.assertIsNone(self.store.one('SELECT * FROM labels WHERE image_id=?',(self.id,)))
+        self.assertEqual(self.store.annotations.export()['items'],[])
+
+    def test_unknown_draft_can_resume_but_requires_problem_and_responsibility_to_confirm(self):
+        proposal,_=self.install_unknown();before=self.human()
+        body=self.payload(proposal,status='draft');body['classification_updates']={'defects':[],'problem_responsibilities':{}}
+        result=self.store.annotations.save(self.id,body)
+        self.assertEqual(result['document']['boxes'][0]['problem'],'')
+        self.assertEqual(result['document']['classification_updates']['defects'],[])
+        self.assertEqual(self.human(),before)
+        self.assertEqual(self.store.annotations.proposal_state()['pending'],1)
+        for updates in (None,{'defects':[],'problem_responsibilities':{}}):
+            body=self.payload(proposal)
+            if updates is not None:body['classification_updates']=updates
+            with self.assertRaisesRegex(ValueError,'选择已有问题点'):
+                self.store.annotations.save(self.id,body)
+        # Selecting a real type without submitting its atomic classification is not enough.
+        body=self.payload(proposal);body['boxes'][0]['problem']='其他破损'
+        with self.assertRaisesRegex(ValueError,'问题点和责任'):
+            self.store.annotations.save(self.id,body)
+        body['classification_updates']={'defects':['其他破损'],'problem_responsibilities':{'其他破损':[]}}
+        with self.assertRaisesRegex(ValueError,'选择责任'):
+            self.store.annotations.save(self.id,body)
+        self.assertEqual(self.human(),before)
+        body['classification_updates']['problem_responsibilities']['其他破损']=['运输']
+        saved=self.store.annotations.save(self.id,body)
+        self.assertEqual(saved['label']['defects'],['其他破损'])
+        self.assertEqual(saved['label']['problem_responsibilities'],{'其他破损':['运输']})
+        self.assertEqual(saved['document']['boxes'][0]['responsibilities'],['运输'])
+        self.assertEqual(self.store.annotations.proposal_state()['accepted'],1)
+        self.assertTrue(self.store.annotations.export()['items'][0]['training_eligible_by_label_policy'])
+        feedback=self.store.annotations.feedback_export()['items'][0]['feedback']
+        self.assertEqual(feedback['events'][0]['changes'],['assigned_problem'])
+
+    def test_multi_problem_unknown_confirmation_appends_without_losing_original_classification(self):
+        proposal,_=self.install_unknown(multi_problem=True)
+        body=self.payload(proposal);body['boxes'][0]['problem']='缺角'
+        body['classification_updates']={'defects':['缺角'],'problem_responsibilities':{'缺角':['生产']}}
+        saved=self.store.annotations.save(self.id,body)
+        self.assertEqual(saved['label']['defects'],['其他破损','崩边','缺角'])
+        self.assertEqual(saved['label']['note'],'保留人工分类')
+        self.assertEqual(saved['label']['problem_responsibilities']['其他破损'],['运输'])
+        self.assertEqual(saved['label']['problem_responsibilities']['缺角'],['生产'])
+
+    def test_unknown_model_draft_requires_matching_original_box(self):
+        proposal,_=self.install_unknown()
+        body=self.payload(proposal,status='draft');body['boxes'][0]['id']='fabricated-model-box'
+        with self.assertRaisesRegex(ValueError,'来源不正确'):
+            self.store.annotations.save(self.id,body)
+        known=self.add_image('known.jpg');self.store.commit([(known,self.label)])
+        self.store.annotations.install_proposals(self.manifest(known));self.id=known
+        proposal=self.store.annotations.detail(known)['proposal']
+        body=self.payload(proposal,status='draft');body['boxes'][0]['problem']=''
+        with self.assertRaisesRegex(ValueError,'来源不正确'):
+            self.store.annotations.save(known,body)
+
+    def test_unclassified_import_rechecks_concurrent_classification_and_review(self):
+        for action in ('classification','review'):
+            self.id=self.add_image('race-'+action+'.jpg')
+            manifest=self.manifest();manifest['items'][0]['boxes'][0]['problem']=''
+            original=self.store.annotations.source
+            def after_source(image_id):
+                source=original(image_id)
+                if action=='classification':self.store.commit([(image_id,self.label)])
+                else:
+                    with self.store.db:
+                        self.store.db.execute("INSERT INTO error_reviews(image_id,run_id,data,status,reviewed_at) VALUES(?,?,?,'reviewed','now')",(image_id,'review-run','{}'))
+                return source
+            self.store.annotations.source=after_source
+            result=self.store.annotations.install_proposals(manifest)
+            self.store.annotations.source=original
+            self.assertEqual((result['imported'],result['skipped']),(0,1))
+            self.assertIsNone(self.store.one('SELECT * FROM annotation_proposals WHERE image_id=?',(self.id,)))
+
+    def test_previous_review_history_never_reopens_for_a_new_model(self):
+        for kind in ('annotation_history','annotation_feedback','error_reviews','annotation_proposal_history'):
+            self.id=self.add_image('reviewed-'+kind+'.jpg')
+            manifest=self.manifest();manifest['items'][0]['boxes'][0]['problem']=''
+            with self.store.db:
+                if kind=='annotation_history':
+                    self.store.db.execute('INSERT INTO annotation_history(image_id,version,after_data,created_at) VALUES(?,1,?,?)',(self.id,json.dumps({'status':'confirmed'}),'now'))
+                elif kind=='annotation_feedback':
+                    self.store.db.execute('INSERT INTO annotation_feedback(image_id,identity,data,created_at) VALUES(?,?,?,?)',(self.id,kind,json.dumps({'status':'confirmed'}),'now'))
+                elif kind=='error_reviews':
+                    self.store.db.execute("INSERT INTO error_reviews(image_id,run_id,data,status,reviewed_at) VALUES(?,?,?,'reviewed','now')",(self.id,'old-run','{}'))
+                else:
+                    self.store.db.execute("INSERT INTO annotation_proposal_history(image_id,proposal_id,data,label_data,status,created_at,archived_at,replaced_by) VALUES(?,?,?,?,'rejected','then','now','new')",(self.id,'old-proposal','{}',''))
+            before=self.human(),self.annotations()
+            result=self.store.annotations.install_proposals({**manifest,'model_id':'future-model'})
+            self.assertEqual((result['imported'],result['skipped']),(0,1))
+            self.assertEqual((self.human(),self.annotations()),before)
+
+    def test_pending_suggestion_disappears_after_an_explicit_error_review(self):
+        self.install_unknown()
+        with self.store.db:
+            self.store.db.execute("INSERT INTO error_reviews(image_id,run_id,data,status,reviewed_at) VALUES(?,?,?,'reviewed','now')",(self.id,'human-reviewed','{}'))
         self.assert_no_pending()
 
     def test_proposals_are_scoped_to_current_root(self):

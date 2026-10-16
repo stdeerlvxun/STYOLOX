@@ -19,9 +19,11 @@ class FakeDetector:
     def __init__(self, empty=False):
         self.calls = 0
         self.empty = empty
+        self.thresholds = []
 
-    def predict_image(self, image, **_):
+    def predict_image(self, image, **kwargs):
         self.calls += 1
+        self.thresholds.append(kwargs.get('threshold'))
         return [] if self.empty else [{'problem': '其他破损', 'score': .8, 'xywh': [.1, .1, .2, .2]}]
 
 
@@ -38,7 +40,12 @@ def fixture(root, count=4):
         CREATE TABLE labels(image_id INTEGER,data TEXT);
         CREATE TABLE drafts(image_id INTEGER);
         CREATE TABLE annotation_documents(image_id INTEGER);
-        CREATE TABLE annotation_proposals(image_id INTEGER,status TEXT);''')
+        CREATE TABLE annotation_proposals(image_id INTEGER,status TEXT);
+        CREATE TABLE annotation_history(image_id INTEGER);
+        CREATE TABLE annotation_feedback(image_id INTEGER);
+        CREATE TABLE annotation_proposal_history(image_id INTEGER,status TEXT);
+        CREATE TABLE error_reviews(image_id INTEGER,status TEXT);
+        CREATE TABLE model_reviews(image_id INTEGER,decision TEXT,status TEXT);''')
     for identity in range(1, count+1):
         path = source/(str(identity)+'.png'); Image.new('RGB', (20, 20), 'white').save(path); stat = path.stat()
         db.execute('INSERT INTO images VALUES(?,?,?,?,?,?,?,?)',
@@ -74,6 +81,51 @@ class RefillTests(unittest.TestCase):
             self.assertEqual(result['summary']['attempted_images'], 2)
             self.assertEqual(result['summary']['remaining_eligible_images'], 5)
             self.assertFalse(result['refresh_pending']); self.assertTrue(result['requires_human_review'])
+            self.assertEqual(detector.thresholds, [.05, .05])
+
+    def test_unclassified_and_multilabel_images_generate_unknown_location_boxes_without_writes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value, snapshot = fixture(root, 4)
+            db = sqlite3.connect(snapshot)
+            db.execute('DELETE FROM labels WHERE image_id=4')
+            db.execute('UPDATE labels SET data=? WHERE image_id=3', (json.dumps({'defects': ['崩边', '划伤']}),))
+            db.execute('UPDATE labels SET data=? WHERE image_id=2', (json.dumps({'defects': []}),))
+            db.commit(); db.close()
+            before = snapshot.read_bytes()
+            detector = FakeDetector()
+            result = refill.generate(value, snapshot, root/'output.json', root/'attempts.json', detector)
+            self.assertEqual([item['image_id'] for item in result['items']], [4, 3, 2, 1])
+            self.assertEqual([item['boxes'][0]['problem'] for item in result['items']], ['', '', '', '崩边'])
+            self.assertEqual(result['items'][0]['label_fingerprint'], hashlib.sha256(b'').hexdigest())
+            self.assertEqual(result['summary']['eligible_images'], 4)
+            self.assertEqual(result['selection_policy'], refill.SELECTION_POLICY)
+            self.assertEqual(detector.thresholds, [.05]*4)
+            self.assertEqual(snapshot.read_bytes(), before, 'All human data is read-only')
+            self.assertFalse(result['classification_results_modified'])
+            self.assertFalse(result['source_images_modified'])
+
+    def test_historical_manual_reviews_and_proposals_never_reenter(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value, snapshot = fixture(root, 14)
+            db = sqlite3.connect(snapshot)
+            db.execute('INSERT INTO annotation_history VALUES(1)')
+            db.execute('INSERT INTO annotation_feedback VALUES(2)')
+            for identity, status in ((3, 'pending'), (4, 'accepted'), (5, 'rejected'), (6, 'stale')):
+                db.execute('INSERT INTO annotation_proposal_history VALUES(?,?)', (identity, status))
+            db.execute("INSERT INTO error_reviews VALUES(7,'reviewed')")
+            db.execute("INSERT INTO error_reviews VALUES(8,'pending')")
+            db.execute("INSERT INTO model_reviews VALUES(9,'unrelated','accepted')")
+            db.execute("INSERT INTO model_reviews VALUES(10,'unrelated','rejected')")
+            db.execute("INSERT INTO model_reviews VALUES(11,'unrelated','pending')")
+            for identity, state in ((12, 'normal'), (13, 'unrelated'), (14, 'unclear')):
+                db.execute('UPDATE labels SET data=? WHERE image_id=?', (json.dumps({'defects': [], 'image_state': state}), identity))
+            db.commit(); db.close()
+            rows, summary = refill.select_refill_rows(snapshot)
+            self.assertEqual([row['image_id'] for row in rows], [11, 10, 8])
+            self.assertEqual(summary['excluded']['existing_human_annotation'], 2)
+            self.assertEqual(summary['excluded']['existing_machine_proposal'], 4)
+            self.assertEqual(summary['excluded']['existing_human_error_review'], 1)
+            self.assertEqual(summary['excluded']['confirmed_unrelated_review'], 1)
 
     def test_empty_predictions_are_not_retried_until_label_source_or_model_changes(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -91,16 +143,34 @@ class RefillTests(unittest.TestCase):
             worker.atomic_json(model/'metrics.json', {'model_sha256': hashlib.sha256(b'new verified model').hexdigest()})
             refill.generate(value, snapshot, root/'five.json', state, detector); self.assertEqual(detector.calls, 4)
 
-    def test_scan_limit_and_multilabel_abstention_are_explicit(self):
+    def test_scan_limit_applies_to_all_unreviewed_images(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); value, snapshot = fixture(root, 8); detector = FakeDetector(empty=True)
             value.update(review_refill_batch_size=2, review_refill_scan_limit=3)
             db = sqlite3.connect(snapshot); db.execute('UPDATE labels SET data=? WHERE image_id=8', (json.dumps({'defects': ['崩边', '划伤']}),)); db.commit(); db.close()
             result = refill.generate(value, snapshot, root/'output.json', root/'attempts.json', detector)
             self.assertEqual(result['summary']['eligible_images'], 8)
-            self.assertEqual(result['summary']['eligible_for_current_model'], 7)
+            self.assertEqual(result['summary']['eligible_for_current_model'], 8)
             self.assertEqual(result['summary']['attempted_images'], 3)
-            self.assertEqual(result['summary']['remaining_eligible_images'], 4)
+            self.assertEqual(result['summary']['remaining_eligible_images'], 5)
+
+    def test_old_policy_attempts_do_not_suppress_new_policy_and_missing_source_is_not_proposed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value, snapshot = fixture(root, 2)
+            rows, _ = refill.select_refill_rows(snapshot)
+            model_sha = refill.file_hash(Path(value['current_detector_run'])/'detector.pt')
+            old_identity = [model_sha, rows[0]['image_id'], rows[0]['label_fingerprint'], value['source_root'],
+                            rows[0]['root_id'], rows[0]['relative_path'], rows[0]['sha256'], rows[0]['size'], rows[0]['mtime_ns']]
+            old_key = hashlib.sha256(json.dumps(old_identity, ensure_ascii=False).encode()).hexdigest()
+            attempts = root/'attempts.json'
+            worker.atomic_json(attempts, {'model_sha256': model_sha, 'attempts': {old_key: {'status': 'no_boxes'}}})
+            (Path(value['source_root'])/'1.png').unlink()
+            result = refill.generate(value, snapshot, root/'output.json', attempts, FakeDetector())
+            self.assertEqual([item['image_id'] for item in result['items']], [2])
+            self.assertEqual(result['summary']['attempted_images'], 2)
+            self.assertEqual(result['summary']['errors'], 1)
+            self.assertEqual(result['errors'][0]['image_id'], 1)
+            self.assertEqual(worker.read_json(attempts)['selection_policy'], refill.SELECTION_POLICY)
 
     def test_enough_pending_never_queries_gpu_or_runs_inference(self):
         with tempfile.TemporaryDirectory() as directory:

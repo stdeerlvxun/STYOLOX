@@ -6,7 +6,7 @@ const S = {token:'',root:null,tags:{defect:[],responsibility:[]},rules:{},respon
   pages:new Map(),pagePending:new Map(),total:0,index:0,current:null,selected:new Set(),view:0,focus:0,client:clientId(),
   dirty:false,revision:0,saveTail:Promise.resolve(),saveTimer:null,busy:false,navigating:false,nav:0,blobs:new Map(),pending:new Map(),
   controllers:new Map(),thumbJobs:[],thumbActive:0,zoom:1,rotation:0,panX:0,panY:0,original:false,importKey:null,loaded:false,
-  recommendationsEnabled:false,recommendation:null,recommendationTimer:null,recommendationPage:0,responsibilityProblem:'',labelStep:1,reviewEnabled:false,links:{},reviewBatches:null,reviewArchivePage:0,reviewQueueReloadPending:false};
+  recommendationsEnabled:false,recommendation:null,recommendationTimer:null,recommendationPage:0,responsibilityProblem:'',labelStep:1,reviewEnabled:false,links:{},reviewBatches:null,reviewArchivePage:0,reviewQueueReloadPending:false,reviewQuality:null,reviewQualityModel:'',reviewQualityTab:'results',reviewQualityLoading:false,reviewQualityError:''};
 let toastTimer, searchTimer, renderFrame, scanWasRunning=false, lastIndexed=0,lastReviewQueueSignature='';
 async function api(path,body){
   const options = body === undefined ? {} : {method:'POST',headers:{'Content-Type':'application/json','X-Local-Token':S.token},body:JSON.stringify(body)};
@@ -41,7 +41,33 @@ function canReloadReviewQueue(){
 }
 function setReviewArchive(open=false){
   $('reviewArchivePanel').hidden=!open;$('reviewBatchArchiveToggle').setAttribute('aria-expanded',String(open));
-  if(open){setLabelPanel();globalThis.AnnotationUI?.hideEditor?.();renderReviewArchive();$('reviewArchiveClose').focus?.();}
+  if(open){setReviewQuality();setLabelPanel();globalThis.AnnotationUI?.hideEditor?.();renderReviewArchive();$('reviewArchiveClose').focus?.();}
+}
+function reviewQualityRate(numerator,denominator){return Number(denominator)>0?(100*Number(numerator||0)/Number(denominator)).toFixed(1)+'%（'+Number(numerator||0)+' / '+Number(denominator)+'）':'—（暂无可计入样本）';}
+function renderReviewQuality(){
+  const data=S.reviewQuality,groups=data?.groups||[],model=$('reviewQualityModel'),selected=groups.find(group=>group.key===S.reviewQualityModel)||data?.current||null;
+  model.replaceChildren();for(const group of groups){const option=document.createElement('option');option.value=group.key;option.textContent=String(group.model_id||'未命名模型')+' · '+Number(group.reviewed_images||0)+' 张';model.append(option);}
+  S.reviewQualityModel=selected?.key||'';model.value=S.reviewQualityModel;model.title=selected?String(selected.model_id||'')+' · '+String(selected.method||''):'';model.disabled=S.reviewQualityLoading||!groups.length;
+  $('reviewQualityRefresh').disabled=S.reviewQualityLoading;
+  const status=S.reviewQualityError?'读取失败，请点刷新重试：'+S.reviewQualityError:S.reviewQualityLoading?'正在统计已提交审核…':!selected?'暂无已提交的机器框审核；完成审核后点击刷新。':data.latest_generated_group_key&&data.latest_generated_group_key!==selected.key?'当前显示已审模型；最新生成模型另组统计。':'按模型分组；默认显示最近完成人审的一组。';
+  $('reviewQualityStatus').textContent=status;$('reviewQualityStatus').title=status;$('reviewQualityStatus').dataset.error=String(!!S.reviewQualityError);
+  $('reviewQualityCoverage').textContent='已审核 '+Number(selected?.reviewed_images||0)+' 张 · 覆盖 '+Number(selected?.distinct_cases||0)+' 个售后单';
+  $('reviewQualityImageRate').textContent=reviewQualityRate(selected?.whole_image_unchanged,selected?.reviewed_images);
+  $('reviewQualityBoxRate').textContent=reviewQualityRate(selected?.unchanged_position_boxes,selected?.reviewed_machine_boxes);
+  $('reviewQualityChanges').textContent='移位 '+Number(selected?.moved_machine_boxes||0)+' 框 · 删除 '+Number(selected?.deleted_machine_boxes||0)+' 框 · 人工补出 '+Number(selected?.human_added_boxes||0)+' 框';
+  $('reviewQualityTypes').textContent='人工赋类型 '+Number(selected?.problem_type_assigned||0)+' 框 · 类型纠正 '+Number(selected?.problem_type_changed||0)+' 框';
+  const lower=selected?.case_rate_lower95;$('reviewQualityConfidence').textContent='按售后单统计的原样通过率 · 95% 单侧下界：'+(typeof lower==='number'?((100*lower).toFixed(1)+'%'):'暂无样本');
+  const list=$('reviewQualityShortfalls');list.replaceChildren();for(const text of selected?.shortfalls?.length?selected.shortfalls:['需要更多人工审核和独立验证，继续人工审核。']){const item=document.createElement('li');item.textContent=String(text);list.append(item);}
+  $('reviewQualityScope').textContent='这是已审核样本的通过率，不是独立测试准确率；不会据此自动开启终判。';
+  const basis=S.reviewQualityTab==='basis';$('reviewQualityResults').hidden=basis;$('reviewQualityBasis').hidden=!basis;$('reviewQualityResultsTab').setAttribute('aria-pressed',String(!basis));$('reviewQualityBasisTab').setAttribute('aria-pressed',String(basis));
+}
+async function loadReviewQuality(){
+  if(S.reviewQualityLoading)return;S.reviewQualityLoading=true;S.reviewQualityError='';renderReviewQuality();
+  try{S.reviewQuality=await api('/api/review-quality/state');}catch(error){S.reviewQualityError=error.message||String(error);}finally{S.reviewQualityLoading=false;renderReviewQuality();}
+}
+function setReviewQuality(open=false){
+  $('reviewQualityPanel').hidden=!open;$('reviewQualityToggle').setAttribute('aria-expanded',String(open));
+  if(open){setReviewArchive();setLabelPanel();globalThis.AnnotationUI?.hideEditor?.();S.reviewQualityTab='results';S.reviewQualityModel='';loadReviewQuality();$('reviewQualityClose').focus?.();}
 }
 function renderReviewArchive(){
   const data=S.reviewBatches||{},worker=reviewWorkerMessage(data.worker),active=data.active_batches||[],archives=data.recent_archives||[];
@@ -69,6 +95,7 @@ function renderReviewBatches(){
   const data=S.reviewBatches;$('reviewBatchSummary').hidden=!data;if(!data)return;
   const current=data.current,worker=reviewWorkerMessage(data.worker);
   $('reviewBatchProgress').textContent=current?'本批 '+Number(current.reviewed||0)+' / '+Number(current.total||0)+' 已审':data.recent_archives?.length?'本批已归档':'等待审核批次';
+  $('reviewBatchProgress').title=$('reviewBatchProgress').textContent;
   $('reviewBatchWorkerStatus').textContent=worker.text;$('reviewBatchWorkerStatus').title=worker.detail||worker.text;$('reviewBatchWorkerStatus').dataset.tone=worker.tone;
   if(!$('reviewArchivePanel').hidden)renderReviewArchive();
   if($('statusFilter').value==='auto_boxes'&&!S.current&&S.total===0&&$('emptyReviewTitle')){const message=reviewQueueMessage();$('emptyReviewTitle').textContent=message.title;$('emptyReviewText').textContent=message.text;}
@@ -550,6 +577,12 @@ on('reviewBatchArchiveToggle','click',()=>setReviewArchive($('reviewArchivePanel
 on('reviewArchiveClose','click',()=>setReviewArchive());
 on('reviewArchivePrevious','click',()=>{S.reviewArchivePage=Math.max(0,S.reviewArchivePage-1);renderReviewArchive();});
 on('reviewArchiveNext','click',()=>{S.reviewArchivePage++;renderReviewArchive();});
+on('reviewQualityToggle','click',()=>setReviewQuality($('reviewQualityPanel').hidden));
+on('reviewQualityClose','click',()=>setReviewQuality());on('reviewQualityContinue','click',()=>setReviewQuality());
+on('reviewQualityRefresh','click',loadReviewQuality);
+on('reviewQualityModel','change',()=>{S.reviewQualityModel=$('reviewQualityModel').value;renderReviewQuality();});
+on('reviewQualityResultsTab','click',()=>{S.reviewQualityTab='results';renderReviewQuality();});
+on('reviewQualityBasisTab','click',()=>{S.reviewQualityTab='basis';renderReviewQuality();});
 on('backToProblems','click',()=>{S.labelStep=1;renderTags();});
 on('selectReviewPage','click',async()=>{const page=Math.floor(S.index/40);await getPage(page);for(const item of S.pages.get(page)||[])S.selected.add(item.id);renderSelection();renderThumbs();});
 on('confirmReviewSelected','click',async()=>{
@@ -619,14 +652,19 @@ on('previewImport','click',async()=>{const result=await api('/api/import/preview
 on('applyImport','click',async()=>{await saveDraft();const result=await api('/api/import/apply',{key:S.importKey});$('applyImport').hidden=true;await refreshState();await reload({index:S.index});toast('已导入 '+result.imported+' 张确认标签、'+result.drafts+' 张暂存');});
 on('export','click',async()=>{await saveDraft();const link=document.createElement('a');link.href='/api/export?'+params({format:$('exportFormat').value});link.download='';link.click();toast('导出当前筛选的已确认标签；暂存请先按 Enter 确认');});
 document.addEventListener('keydown',e=>{
+  if($('reviewQualityPanel').hidden)return;
+  if(e.key==='Escape'){e.preventDefault();e.stopImmediatePropagation();setReviewQuality();return;}
+  if(e.target.closest('#reviewQualityPanel'))e.stopImmediatePropagation();
+},true);
+document.addEventListener('keydown',e=>{
   if($('reviewArchivePanel').hidden)return;
   if(e.key==='Escape'){e.preventDefault();e.stopImmediatePropagation();setReviewArchive();return;}
   if(e.target.closest('#reviewArchivePanel'))e.stopImmediatePropagation();
 },true);
 document.addEventListener('keydown',e=>{
   if(e.defaultPrevented)return;
-  if(e.key==='Escape'){setReviewArchive();setLabelPanel();for(const details of document.querySelectorAll('.add-tag-details[open],#contextDetails[open],#responsibilityMatrix[open]'))details.open=false;return;}
-  if(e.target.closest('#reviewArchivePanel'))return;
+  if(e.key==='Escape'){setReviewArchive();setReviewQuality();setLabelPanel();for(const details of document.querySelectorAll('.add-tag-details[open],#contextDetails[open],#responsibilityMatrix[open]'))details.open=false;return;}
+  if(e.target.closest('#reviewArchivePanel,#reviewQualityPanel'))return;
   if(e.key==='Enter'&&e.target.closest('#recommendationPanel'))return;
   if(e.target.matches('input,textarea,select,[contenteditable=true]'))return;
   if(e.key==='Enter'&&e.target.closest('button')&&!['commit','workspaceCommit'].includes(e.target.closest('button').id))return;
@@ -639,6 +677,7 @@ window.addEventListener('beforeunload',e=>{if(S.dirty){e.preventDefault();e.retu
 document.addEventListener('click',e=>{for(const details of document.querySelectorAll('.add-tag-details[open],#contextDetails[open],#responsibilityMatrix[open]'))if(!details.contains(e.target))details.open=false;});
 document.addEventListener('click',e=>{if(!$('labelPanel').hidden&&!e.target.closest('#labelPanel,#labelPanelToggle,#imageStateToggle'))setLabelPanel();});
 document.addEventListener('click',e=>{if(!$('reviewArchivePanel').hidden&&!e.target.closest('#reviewArchivePanel,#reviewBatchArchiveToggle'))setReviewArchive();});
+document.addEventListener('click',e=>{if(!$('reviewQualityPanel').hidden&&!e.target.closest('#reviewQualityPanel,#reviewQualityToggle'))setReviewQuality();});
 const launchStatus=new URLSearchParams(location.search).get('status');
 if(launchStatus&&[...$('statusFilter').options].some(option=>option.value===launchStatus))$('statusFilter').value=launchStatus;
 renderStatusControls();
