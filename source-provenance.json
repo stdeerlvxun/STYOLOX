@@ -153,7 +153,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "17e74fa6fb114199ea7ba7b5bcc068d98c209f07",
+    "source_commit": "f9c140f698b0cb60fbc04a5a775f925aa112f27d",
     "files": [
       {
         "path": ".gitignore",
@@ -293,7 +293,7 @@
       },
       {
         "path": "test_box_flow_ui.cjs",
-        "sha256": "a30cde61faf728eadb5a83a407d4c38429c9eb5c019663e4bfb36080b735d054"
+        "sha256": "1bdd669bdb6410779a884102d0d176fb055b589cf9252e66b8c13e5275a5b981"
       },
       {
         "path": "test_box_proposals.py",
@@ -353,7 +353,7 @@
       },
       {
         "path": "web/annotations.js",
-        "sha256": "cb2e1c05d8bb5c3c6ec89ecc66d5ef70332431f4fcab8abaef0516512d00f76b"
+        "sha256": "7b20738e7b6c42233863ab815bc5971b64b537244236c7b7aca8a0c7ee64d21b"
       },
       {
         "path": "web/app.js",
@@ -361,11 +361,11 @@
       },
       {
         "path": "web/index.html",
-        "sha256": "167a99880acc094f28d9e85cdb12507b27a3907127186c2e7ba825677e44c1d5"
+        "sha256": "0b16e018aa17f587a3a7646c184356c624ad3be21f135603eebe156e78b9ff74"
       },
       {
         "path": "web/style.css",
-        "sha256": "19deecdba64ba1e98743c2d3b3c707ebfb906ad09ed0b38557e0880e7983b400"
+        "sha256": "5e7ceab7b06b1393f1a045d48836ee6ec8b0d0d5103dd087b81d880fe292e54c"
       },
       {
         "path": "启动分类工具.cmd",

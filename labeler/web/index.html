@@ -68,7 +68,7 @@
         <img id="photo" alt="" draggable="false" hidden>
         <svg id="annotationOverlay" aria-hidden="true" hidden></svg>
         <section id="boxEditor" class="box-editor" role="dialog" aria-label="当前问题框的问题与责任" hidden>
-          <div class="box-editor-heading"><h3 id="boxEditorTitle">当前问题框</h3><button id="boxEditorClose" class="text-button" title="收起面板，保留当前编辑">收起</button></div>
+          <div class="box-editor-heading"><h3 id="boxEditorTitle">当前问题框</h3><div class="box-editor-heading-actions"><button id="boxEditorMove" class="text-button" title="收起面板，拖动框内移动或拖动四角缩放">移动 / 缩放</button><button id="boxEditorDelete" class="text-button" title="删除当前框，可撤销；不必先选责任">删除此框</button><button id="boxEditorClose" class="text-button" title="收起面板，保留当前编辑">收起</button></div></div>
           <div class="box-editor-columns">
             <section class="box-editor-problem-column"><h3>问题点 <span class="small muted">选择当前这一处</span></h3><div id="boxEditorProblems" class="chips box-editor-problems" aria-label="选择问题点"></div></section>
             <section id="boxEditorResponsibilitySection" class="box-editor-responsibility-column"><h3>责任 <span class="small muted">可多选</span></h3><div id="boxEditorResponsibilities" class="chips compact" aria-label="选择责任"></div><p id="boxEditorResponsibilityHint" class="small muted"></p><div class="box-editor-automatic-row"><p id="boxEditorAutomatic" class="box-editor-automatic small" hidden></p><button id="boxEditorRestoreDefault" class="text-button" hidden>恢复默认</button></div></section>

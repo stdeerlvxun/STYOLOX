@@ -179,6 +179,7 @@
 .workspace-v2 .box-editor{width:min(568px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:visible;padding:12px;border:1px solid #aebed3;border-radius:10px;background:#fff;color:#17212e;box-shadow:0 8px 30px #0f203f55;gap:8px}
 .workspace-v2 .box-editor-heading{min-height:27px;padding-bottom:7px;border-bottom:1px solid #d9e0e8}
 .workspace-v2 .box-editor-heading h3{margin:0;font-size:15px;color:#182a44}
+.box-editor-heading-actions{display:flex;align-items:center;gap:8px}.box-editor-heading-actions .text-button{min-height:28px;padding:2px 4px;font-size:12px;white-space:nowrap}.box-editor-heading-actions #boxEditorDelete{color:#9c241a}
 .box-editor-columns{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);gap:14px;min-height:0}
 .box-editor-columns>section{min-width:0}
 .box-editor-columns h3{display:flex;align-items:center;gap:7px;margin:0 0 8px;font-size:14px}

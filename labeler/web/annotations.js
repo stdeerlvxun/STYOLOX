@@ -106,6 +106,7 @@
     const editor=el('boxEditor'),box=popupBox();editor.hidden=!box;if(!box){A.popup=null;return;}
     const automatic=S.rules?.[box.problem],roles=standardResponsibilities(box.problem,box),conflicts=conflictingRegions(box);
     if(el('boxEditorTitle'))el('boxEditorTitle').textContent=box.suggestion?'纠正机器框':'标注问题位置';
+    for(const id of ['boxEditorMove','boxEditorDelete'])if(el(id))el(id).disabled=S.busy||!ready();
     el('boxEditorProblems').replaceChildren();
     for(const name of problemOrder()){const button=document.createElement('button');button.type='button';button.textContent=name;button.setAttribute('aria-pressed',String(name===box.problem));button.classList.toggle('existing-problem',(S.current?.label?.defects||[]).includes(name));button.addEventListener('click',()=>{if(name===box.problem)return;editPopup(current=>{
       current.problem=name;delete current.responsibility_override;Object.assign(current,responsibilityFields(name));A.lastProblem=name;
@@ -287,7 +288,10 @@
   el('boxEditorKeepNormal')?.addEventListener('click',()=>resolveConflict(false));
   el('boxEditorRestoreDefault')?.addEventListener('click',()=>{const box=popupBox(),automatic=S.rules?.[box?.problem];if(automatic)editPopup(current=>{current.responsibilities=[automatic];current.responsibility_override=true;});});
   el('boxEditorDone').addEventListener('click',()=>{try{continueBox();}catch(error){fail(error);}});
-  el('boxEditorClose').addEventListener('click',()=>{try{confirmCurrentBox();A.draw=false;render();}catch(error){fail(error);}});
+  function resumeCanvasEditing(){closePopup();A.draw=false;render();stage.focus?.({preventScroll:true});}
+  el('boxEditorClose').addEventListener('click',resumeCanvasEditing);
+  el('boxEditorMove')?.addEventListener('click',()=>{resumeCanvasEditing();toast('拖动框内移动，拖动四角缩放；Enter 再确认问题与责任');});
+  el('boxEditorDelete')?.addEventListener('click',()=>{if(!ready()||S.busy)return;closePopup();removeSelected();stage.focus?.({preventScroll:true});});
   el('boxSelect').addEventListener('change',()=>{A.selected=el('boxSelect').value;A.draw=false;const box=selectedBox();if(box)el('boxProblem').value=box.problem;render();});
   function markNegative(box,reason){
     A.negativeRegions.push({id:clientId(),x:box.x,y:box.y,w:box.w,h:box.h,reason,...(box.source_box_id||box.origin==='model'?{source_box_id:box.source_box_id||box.id}:{})});
@@ -335,7 +339,7 @@
     const right=event.button===2;
     if((!A.active&&!right)||!ready()||S.busy||el('photo').hidden||event.target.closest('button')||event.target.closest('#boxEditor')||(event.button!==undefined&&event.button!==0&&!right))return;
     if(A.drag){consume(event);return;}
-    if(A.popup){if(conflictingRegions(popupBox()).length)closePopup();else try{confirmCurrentBox();}catch(error){consume(event);fail(error);return;}}
+    if(A.popup)closePopup();
     if(right){if(!A.active)A.quickFlow=true;A.active=true;A.draw=false;}
     const point=pointer(event),selected=selectedBox(),corner=selected&&!A.draw?cornerHit(event,selected):-1;
     if((A.draw||right)&&point.inside)A.drag={kind:'draw',start:point,box:{x:point.x,y:point.y,w:0,h:0},popup:true,problem:defaultProblem(),before:annotationSnapshot()};
@@ -345,7 +349,7 @@
       if(box){A.selected=box.id;el('boxProblem').value=box.problem;A.drag={kind:'move',start:point,original:structuredClone(box),box:structuredClone(box)};}
     }
     if(!A.drag)return;
-    consume(event);A.drag.pointerId=event.pointerId;stage.setPointerCapture(event.pointerId);render();
+    consume(event);stage.focus?.({preventScroll:true});A.drag.pointerId=event.pointerId;stage.setPointerCapture(event.pointerId);render();
   },true);
   stage.addEventListener('pointermove',event=>{
     if(!A.drag||A.drag.pointerId!==event.pointerId)return;consume(event);const p=pointer(event),s=A.drag.start,original=A.drag.original;

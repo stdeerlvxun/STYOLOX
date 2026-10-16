@@ -32,6 +32,7 @@ class Element{
       version++;return {version,label_fingerprint:body.status==='confirmed'?'confirmed-label':'old-label',...(body.status==='confirmed'?{label:structuredClone(label)}:{})};
     }});
   context.saveDraft=()=>vm.runInContext('AnnotationUI.saveDraft()',context);
+  el('photoStage').focus=options=>{assert.equal(options.preventScroll,true);context.document.activeElement=el('photoStage');};
   vm.runInContext(fs.readFileSync('web/annotations.js','utf8'),context);
   await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);
   assert.equal(reads,1,'Current image metadata is ready even outside annotation mode');
@@ -234,6 +235,27 @@ class Element{
   await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);await el('rejectAutoBoxes').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
   assert.equal(writes.at(-1).status,'draft');assert.equal(writes.at(-1).expected_proposal_fingerprint,'reject-visible-fingerprint');assert.equal(writes.at(-1).boxes.length,0);assert.deepEqual(context.S.current.label,unclassifiedLabel);
   await key('Enter');assert.equal(writes.at(-1).status,'confirmed');assert.equal(writes.at(-1).expected_proposal_fingerprint,'reject-visible-fingerprint','Reject-all uses the same visible prediction guard through the annotation confirmation endpoint');assert.equal(writes.at(-1).negative_regions.length,1);assert.equal(failures.length,0);
+  // Editing a typed shared issue must not require responsibility before moving, selecting, deleting or retyping.
+  context.S.current.label=structuredClone(unclassifiedLabel);fixtureBoxes=[structuredClone(human)];fixtureRegions=[];fixtureProposalId=null;fixtureProposalFingerprint=null;
+  const sharedCandidate={...proposalBox,id:'shared-prediction',problem:'划伤',type_provenance:{source:'detector_class_prediction',model_sha256:'a'.repeat(64),score:.7,scope:'box'},problem_source:'model_prediction'};
+  fixtureProposal={proposal_id:'editable-typed-proposal',content_fingerprint:'editable-fingerprint',model_id:'typed-detector',method:'typed',status:'pending',source_sha256:'source',label_fingerprint:'old-label',boxes:[sharedCandidate,{...secondCandidate,id:'other-prediction',problem:'崩边'}]};
+  await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);
+  const priorInput=new Element('input','search');priorInput.matches=selector=>selector.includes('input');context.document.activeElement=priorInput;
+  await clickPoint(.5,.425,80);assert.equal(context.document.activeElement,el('photoStage'),'Clicking a box focuses the canvas so prior form focus cannot swallow Delete');assert.equal(el('boxEditor').hidden,false);
+  await clickPoint(.8,.15,81);assert.equal(el('boxSelect').value,'suggestion:other-prediction','Selecting a different box must not validate the prior shared issue');assert.equal(failures.length,0);
+  await clickPoint(.5,.425,82);
+  const editStart=geometry.screenPoint(.5,.425,view),editEnd=geometry.screenPoint(.6,.475,view);
+  await el('photoStage').fire('pointerdown',{button:0,clientX:editStart.x,clientY:editStart.y,pointerId:83});await el('photoStage').fire('pointermove',{button:0,clientX:editEnd.x,clientY:editEnd.y,pointerId:83});await el('photoStage').fire('pointerup',{button:0,clientX:editEnd.x,clientY:editEnd.y,pointerId:83});await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.ok(Math.abs(writes.at(-1).boxes.find(box=>box.id==='shared-prediction').x-.5)<1e-10,'Dragging from an open missing-responsibility popup must move the model box');assert.equal(failures.length,0);assert.deepEqual(writes.at(-1).boxes[0],human);assert.deepEqual(context.S.current.label,unclassifiedLabel);
+  await clickPoint(.6,.475,84);await el('boxEditorMove').fire('click');assert.equal(el('boxEditor').hidden,true);assert.equal(el('boxSelect').value,'shared-prediction');assert.equal(context.document.activeElement,el('photoStage'));
+  const resizeStart=geometry.screenPoint(.7,.6,view),resizeEnd=geometry.screenPoint(.72,.65,view);
+  await el('photoStage').fire('pointerdown',{button:0,clientX:resizeStart.x,clientY:resizeStart.y,pointerId:85});await el('photoStage').fire('pointermove',{button:0,clientX:resizeEnd.x,clientY:resizeEnd.y,pointerId:85});await el('photoStage').fire('pointerup',{button:0,clientX:resizeEnd.x,clientY:resizeEnd.y,pointerId:85});await vm.runInContext('AnnotationUI.saveDraft()',context);assert.ok(Math.abs(writes.at(-1).boxes.find(box=>box.id==='shared-prediction').w-.22)<1e-10);
+  await clickPoint(.6,.475,86);await button('boxEditorProblems','残胶').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.equal(writes.at(-1).boxes.find(box=>box.id==='shared-prediction').problem,'残胶','Actual picture click opens a typed box for reclassification');
+  await button('boxEditorProblems','划伤').fire('click');await el('boxEditorClose').fire('click');assert.equal(el('boxEditor').hidden,true);assert.equal(failures.length,0,'Closing an editor keeps the draft without requiring responsibility');
+  await key('Enter',context.document.activeElement);assert.match(failures.pop().message,/选择责任/,'Final submission still requires responsibility');assert.equal(el('boxEditor').hidden,false);
+  await el('boxEditorDelete').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.ok(!writes.at(-1).boxes.some(box=>box.id==='shared-prediction'));assert.deepEqual(writes.at(-1).boxes[0],human);assert.equal(writes.at(-1).negative_regions[0].source_box_id,'shared-prediction');assert.equal(failures.length,0,'Deleting an incorrect prediction does not require responsibility');
+  await el('undoBox').fire('click');context.document.activeElement=priorInput;await clickPoint(.6,.475,87);await key('Delete',context.document.activeElement);await vm.runInContext('AnnotationUI.saveDraft()',context);assert.ok(!writes.at(-1).boxes.some(box=>box.id==='shared-prediction'),'Delete operates on the clicked frame after an input had focus');assert.deepEqual(context.S.current.label,unclassifiedLabel);assert.equal(failures.length,0);
+  console.log('Picture pointer selection, shared-issue move/resize/retype without premature validation, canvas focus, popup move/delete actions and final-submit responsibility validation passed.');
   console.log('Typed model defaults, editable responsibility, atomic unclassified confirmation and legacy draft upgrade passed.');
   console.log('Untyped all-image boxes: explicit type and responsibility, Enter focus/error, resumable draft, empty classification prevention and human-box preservation passed.');
   console.log('Conflict repair, move and Delete preserve other model candidates and can proceed to confirmation.');
