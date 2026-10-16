@@ -386,6 +386,8 @@ class Store:
                 "(SELECT 1 FROM annotation_documents a WHERE a.image_id=i.id AND json_extract(a.data,'$.status')='confirmed')")
         elif status == 'annotated':
             parts.append('EXISTS (SELECT 1 FROM annotation_documents a WHERE a.image_id=i.id)')
+        elif status == 'auto_boxes':
+            parts.append('EXISTS (SELECT 1 FROM annotation_proposals p WHERE p.image_id=i.id AND '+self.annotations.proposal_match()+')')
         elif status == "pending":
             parts.append("(json_extract(l.data,'$.image_state')='unclear' OR EXISTS "
                          "(SELECT 1 FROM json_each(l.data,'$.responsibilities') WHERE value='待核'))")
@@ -729,6 +731,7 @@ class Application:
                 "responsibility_links": responsibility_links(self.store,RESPONSIBILITY_RULES),
                 "annotation_counts": self.store.one('SELECT COUNT(*) documents,SUM(json_extract(a.data,\'$.status\')=\'confirmed\') confirmed '
                     'FROM annotation_documents a JOIN images i ON i.id=a.image_id WHERE i.root_id=?',(root['id'],)),
+                "annotation_proposal_counts":self.store.annotations.proposal_state(),
                 "error_review_counts": self.store.one("SELECT COUNT(*) total,SUM(e.status='pending') pending FROM error_reviews e JOIN images i "
                     "ON i.id=e.image_id WHERE i.root_id=? AND e.run_id=(SELECT value FROM settings WHERE key='error_review_run')",(root['id'],)),
                 "recommendations": self.recommendations.state(),
@@ -888,6 +891,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(self.app.store.annotations.detail(int(params['id'][0])))
             if path == '/api/annotations/export':
                 return self.send(self.app.store.annotations.export(),headers={'Content-Disposition':'attachment; filename="problem-localizations.json"'})
+            if path == '/api/annotation-proposals/state':
+                return self.send(self.app.store.annotations.proposal_state())
             if path == '/api/responsibility-links':
                 from annotations import responsibility_links
                 return self.send(responsibility_links(self.app.store,RESPONSIBILITY_RULES))
@@ -944,6 +949,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = store.commit([(int(body["id"]), body["label"])], only_unclassified=bool(body.get("only_unclassified")), expected_draft=body.get("expected_draft"), review_run=body.get('review_run'))
             elif path == '/api/annotations':
                 result = store.annotations.save(int(body['id']),body)
+            elif path == '/api/annotation-proposals/reject':
+                result=store.annotations.reject_proposal(int(body['id']),body['proposal_id'])
             elif path == "/api/batch":
                 result = store.batch(body["ids"], body["label"])
             elif path == "/api/review/unrelated":

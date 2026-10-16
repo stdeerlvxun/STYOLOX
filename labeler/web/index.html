@@ -32,7 +32,7 @@
         <div class="filter-heading"><h2>图片</h2><span id="resultCount">0 张</span></div>
         <p class="small muted">近期优先 · 按售后单日期从近到远</p>
         <label class="sr-only" for="statusFilter">分类状态</label>
-        <select id="statusFilter"><option value="unclassified">日常分类 · 跳过模型待审核</option><option value="error_review">错例待复核 / 补标</option><option value="error_reviewed">本轮错例已复核</option><option value="annotation_pending">问题图待位置补标</option><option value="annotated">已有位置补标</option><option value="model_unrelated">模型判定无关 · 待审核</option><option value="all_unclassified">所有未分类 · 含模型待审核</option><option value="all">全部图片</option><option value="classified">已分类</option><option value="unrelated">已确认无关图片</option><option value="normal">已确认无可见破损</option><option value="pending">责任待核 / 看不清</option><option value="unavailable">源文件不可用</option></select>
+        <select id="statusFilter"><option value="unclassified">日常分类 · 跳过模型待审核</option><option value="error_review">错例待复核 / 补标</option><option value="error_reviewed">本轮错例已复核</option><option value="auto_boxes">自动框 · 待审核</option><option value="annotation_pending">问题图待位置补标</option><option value="annotated">已有位置补标</option><option value="model_unrelated">模型判定无关 · 待审核</option><option value="all_unclassified">所有未分类 · 含模型待审核</option><option value="all">全部图片</option><option value="classified">已分类</option><option value="unrelated">已确认无关图片</option><option value="normal">已确认无可见破损</option><option value="pending">责任待核 / 看不清</option><option value="unavailable">源文件不可用</option></select>
         <select id="reviewKind" aria-label="错例类型" hidden><option value="">全部错例</option><option value="problem_miss">问题点漏判</option><option value="extra_candidate">问题点额外候选</option><option value="normal_overcall">正常图报出问题</option><option value="false_unrelated">相关图误判无关</option><option value="missed_unrelated">未识别出的无关图</option></select>
         <div id="reviewActions" hidden><button id="selectReviewPage">选中本页</button><button id="confirmReviewSelected">确认所选无关</button></div>
         <label class="sr-only" for="search">搜索图片</label><input id="search" placeholder="搜索文件名、售后单或备注" type="search">
@@ -50,10 +50,11 @@
       <div class="viewer-toolbar"><span id="position">等待图片</span><div class="viewer-buttons"><button id="showLibrary">图片列表</button><button id="previous" title="上一张（左方向键）">上一张</button><button id="next" title="下一张（右方向键）">下一张</button><button id="fit">适合窗口</button><button id="rotate">旋转</button><button id="fullResolution">原始清晰度</button><button id="toggleAnnotations" aria-pressed="false">位置补标</button></div></div>
       <section id="annotationBar" class="annotation-bar" hidden aria-label="问题位置补标">
         <p id="errorReviewSummary" class="small" role="status">原分类保留，位置补标单独保存。</p>
+        <div id="autoBoxProposal" class="annotation-proposal" hidden><p id="autoBoxSummary" class="small" role="status"></p><div class="annotation-controls"><button id="adoptAutoBoxes">采用建议框</button><button id="rejectAutoBoxes" class="text-button">建议不对 · 拒绝</button><span class="small muted">虚线为机器建议；采用后可拖动框和四角，确认后才算人工补标。</span></div></div>
         <div class="annotation-controls"><select id="boxProblem" aria-label="新框或改框的问题类型"></select><button id="drawBox" aria-pressed="false">开始框选</button><select id="boxSelect" aria-label="选择已有问题框"></select><button id="relabelBox">修改框类型</button><button id="deleteBox">删除选中框</button><button id="undoBox">撤销改框</button></div>
         <div class="annotation-controls"><select id="reviewOutcome" aria-label="本次复核结果"><option value="boxed">已框选问题位置</option><option value="labels_correct">原分类正确 / 无需加框</option><option value="needs_correction">原分类需另行修改</option><option value="unclear">看不清，继续排除训练</option></select><button id="confirmAnnotation" class="primary">保存补标并下一张</button><button id="reloadAnnotation" class="text-button">重新读取</button><span id="annotationStatus" class="small" role="status"></span></div>
       </section>
-      <div id="photoStage" class="photo-stage" tabindex="0" aria-label="图片画布，滚轮缩放，拖动平移">
+      <div id="photoStage" class="photo-stage" tabindex="0" aria-label="图片画布，滚轮缩放，拖动平移；补标时可拖动选中框及四角调整位置">
         <!-- impeccable-disable-next-line broken-image: viewer stays hidden until a real source-image blob is assigned -->
         <img id="photo" alt="" draggable="false" hidden>
         <svg id="annotationOverlay" aria-hidden="true" hidden></svg>

@@ -312,8 +312,9 @@ function empty(){
   $('imageMessage').hidden=false;$('imageMessage').replaceChildren();
   const strong=document.createElement('strong'),span=document.createElement('span');
   const reviewed=$('statusFilter').value==='error_review'&&S.errorReviewCounts?.total>0&&S.errorReviewCounts.pending===0;
-  strong.textContent=reviewed?'本轮错例复核已完成，结果已保存':scanWasRunning?'正在索引图片':'当前筛选没有图片';
-  span.textContent=reviewed?'可切换“本轮错例已复核”查看；位置框需另行框选保存。':scanWasRunning?'找到图片后即可开始分类。':'可切换“全部图片”、清除筛选或重新扫描目录。';
+  const boxesReviewed=$('statusFilter').value==='auto_boxes'&&S.proposalCounts?.total>0&&S.proposalCounts.pending===0;
+  strong.textContent=boxesReviewed?'本批自动框审核已完成':reviewed?'本轮错例复核已完成，结果已保存':scanWasRunning?'正在索引图片':'当前筛选没有图片';
+  span.textContent=boxesReviewed?'已确认的位置补标已保存，原分类保持不变；可切换“已有位置补标”查看。':reviewed?'可切换“本轮错例已复核”查看；位置框需另行框选保存。':scanWasRunning?'找到图片后即可开始分类。':'可切换“全部图片”、清除筛选或重新扫描目录。';
   $('imageMessage').append(strong,span);$('position').textContent='没有可显示的图片';$('fileName').textContent='原图不移动、不复制';$('commit').disabled=true;$('locate').disabled=true;$('note').value='';saveIndicator('未选择图片');renderTags();
 }
 async function selectIndex(index,{internal=false}={}){
@@ -393,6 +394,11 @@ async function refreshState(){
   $('counts').textContent='已索引 '+state.counts.total+' · 已分类 '+state.counts.classified+' · 未分类 '+(state.counts.total-state.counts.classified);
   if(S.reviewEnabled)$('counts').textContent+=' · 模型无关待审核 '+state.model_review.pending;
   if(state.error_review_counts?.total)$('counts').textContent+=' · 错例复核 '+(state.error_review_counts.total-state.error_review_counts.pending)+'/'+state.error_review_counts.total+' · 位置补标 '+(state.annotation_counts?.confirmed||0)+'张';
+  const proposals=state.annotation_proposal_counts;
+  S.proposalCounts=proposals;
+  if(proposals?.total)$('counts').textContent+=' · 自动框待审 '+proposals.pending;
+  const proposalOption=$('statusFilter').querySelector('option[value="auto_boxes"]');
+  if(proposalOption)proposalOption.textContent='自动框 · 待审核（'+(proposals?.pending||0)+'）';
   $('reviewKind').hidden=!$('statusFilter').value.startsWith('error_review');
   const errorOption=$('statusFilter').querySelector('option[value="error_review"]');
   if(errorOption)errorOption.textContent='错例待复核 / 补标（'+(state.error_review_counts?.pending||0)+'）';
@@ -503,7 +509,7 @@ document.addEventListener('keydown',e=>{
 window.addEventListener('beforeunload',e=>{if(S.dirty){e.preventDefault();e.returnValue='';}});
 document.addEventListener('click',e=>{for(const details of document.querySelectorAll('.add-tag-details[open],#contextDetails[open],#responsibilityMatrix[open]'))if(!details.contains(e.target))details.open=false;});
 const launchStatus=new URLSearchParams(location.search).get('status');
-if(['error_review','error_reviewed','annotation_pending','annotated'].includes(launchStatus))$('statusFilter').value=launchStatus;
+if(['error_review','error_reviewed','annotation_pending','annotated','auto_boxes'].includes(launchStatus))$('statusFilter').value=launchStatus;
 (async()=>{
   const state=await refreshState();scanWasRunning=state.scan.running;lastIndexed=state.counts.total;
   await reload();S.loaded=true;poll();
