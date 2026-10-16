@@ -245,6 +245,7 @@ class Store:
         record["has_draft"] = bool(draft)
         record["classified"] = bool(committed)
         record['has_annotations']=bool(self.one('SELECT image_id FROM annotation_documents WHERE image_id=?',(image_id,)))
+        record['error_review']=self.annotations.review(image_id)
         record["model_unrelated"] = bool(not committed and not draft and self.one(
             'SELECT i.id FROM images i WHERE i.id=? AND '+self.review_match(),(image_id,)))
         record["full_path"] = str(self.path(record))
@@ -267,12 +268,16 @@ class Store:
             self.db.execute("INSERT OR REPLACE INTO drafts VALUES(?,?,?)", (image_id, dumps(label), now()))
         return {"saved": True, "draft_fingerprint": hashlib.sha256(dumps(label).encode()).hexdigest()}
 
-    def commit(self, entries, kind="commit", only_unclassified=False, expected_draft=None):
+    def commit(self, entries, kind="commit", only_unclassified=False, expected_draft=None, review_run=None):
         if not entries or len(entries) > 1000:
             raise ValueError("一次操作请选择 1～1000 张图片")
         root = self.current_root()
         changes = []
         with self.lock, self.db:
+            if review_run:
+                active=self.one("SELECT value FROM settings WHERE key='error_review_run'")
+                if not active or active['value']!=review_run:
+                    raise ValueError('错例复核批次已变化，请重新读取；分类未覆盖')
             for image_id, data in entries:
                 image = self.image(image_id)
                 if image["root_id"] != root["id"]:
@@ -280,7 +285,14 @@ class Store:
                 value = clean_label(data, complete=True)
                 before = self.one("SELECT * FROM labels WHERE image_id=?", (image_id,))
                 if only_unclassified:self.protect_recommendation_save(image_id, expected_draft)
-                changes.append({"id": image_id, "before": before, "after": value})
+                change={"id": image_id, "before": before, "after": value}
+                if review_run:
+                    review=self.one('SELECT status,reviewed_at FROM error_reviews WHERE image_id=? AND run_id=?',(image_id,review_run))
+                    if not review:raise ValueError('图片不属于当前错例复核批次')
+                    change['error_review_before']={**review,'run_id':review_run}
+                    self.db.execute("UPDATE error_reviews SET status='reviewed',reviewed_at=? WHERE image_id=? AND run_id=?",
+                        (now(),image_id,review_run))
+                changes.append(change)
                 self.db.execute("INSERT OR REPLACE INTO labels VALUES(?,?,?)", (image_id, dumps(value), now()))
                 self.db.execute("DELETE FROM drafts WHERE image_id=?", (image_id,))
                 for group, field in (("defect", "defects"), ("responsibility", "responsibilities")):
@@ -288,7 +300,7 @@ class Store:
                         self.db.execute("INSERT OR IGNORE INTO tags VALUES(?,?,999)", (group, name))
             self.db.execute("INSERT INTO history(root_id,kind,data,created_at) VALUES(?,?,?,?)",
                             (root["id"], kind, dumps(changes), now()))
-        return {"saved": len(changes), "image_id": changes[0]["id"]}
+        return {"saved": len(changes), "image_id": changes[0]["id"], "review_completed":len(changes) if review_run else 0}
 
     def batch(self, ids, additions):
         entries = []
@@ -337,6 +349,13 @@ class Store:
                 # Keep the just-confirmed choices visible as a draft for easy correction.
                 self.db.execute("INSERT OR REPLACE INTO drafts VALUES(?,?,?)",
                                 (item["id"], dumps(item["after"]), now()))
+                review=item.get('error_review_before')
+                if review:
+                    self.db.execute('UPDATE error_reviews SET status=?,reviewed_at=? WHERE image_id=? AND run_id=?',
+                        (review['status'],review['reviewed_at'],item['id'],review['run_id']))
+                else:
+                    self.db.execute("UPDATE error_reviews SET status='pending',reviewed_at=NULL WHERE image_id=? "
+                        "AND run_id=(SELECT value FROM settings WHERE key='error_review_run')",(item['id'],))
             self.db.execute("UPDATE history SET undone=1 WHERE id=?", (row["id"],))
         return {"undone": len(changes), "image_id": changes[0]["id"]}
 
@@ -922,7 +941,7 @@ class Handler(BaseHTTPRequestHandler):
             elif path == "/api/draft":
                 result = store.save_draft(int(body["id"]), body["label"], bool(body.get("only_unclassified")), body.get("expected_draft"))
             elif path == "/api/commit":
-                result = store.commit([(int(body["id"]), body["label"])], only_unclassified=bool(body.get("only_unclassified")), expected_draft=body.get("expected_draft"))
+                result = store.commit([(int(body["id"]), body["label"])], only_unclassified=bool(body.get("only_unclassified")), expected_draft=body.get("expected_draft"), review_run=body.get('review_run'))
             elif path == '/api/annotations':
                 result = store.annotations.save(int(body['id']),body)
             elif path == "/api/batch":

@@ -114,7 +114,7 @@ function renderWorkflow(){
   document.querySelector('.label-panel').dataset.step=String(S.labelStep||1);
   $('workflowTitle').textContent=S.labelStep===2?'2 · 确认责任':'1 · 先找问题点';
   $('backToProblems').hidden=S.labelStep!==2;
-  $('commit').textContent=S.labelStep!==2&&S.current?.label.defects.length?'下一步 · 确认责任 ↵':'确认保存并下一张 ↵';
+  $('commit').textContent=S.labelStep!==2&&S.current?.label.defects.length?'下一步 · 确认责任 ↵':$('statusFilter').value==='error_review'?'保存分类并完成复核 ↵':'确认保存并下一张 ↵';
   $('reviewActions').hidden=!S.reviewEnabled||$('statusFilter').value!=='model_unrelated';
   $('rejectUnrelated').hidden=!S.current?.model_unrelated||S.current?.classified||S.current?.has_draft;
   $('rejectUnrelated').disabled=S.busy||S.navigating||S.dirty;
@@ -311,7 +311,9 @@ function empty(){
   globalThis.AnnotationUI?.empty();
   $('imageMessage').hidden=false;$('imageMessage').replaceChildren();
   const strong=document.createElement('strong'),span=document.createElement('span');
-  strong.textContent=scanWasRunning?'正在索引图片':'当前筛选没有图片';span.textContent=scanWasRunning?'找到图片后即可开始分类。':'可切换“全部图片”、清除筛选或重新扫描目录。';
+  const reviewed=$('statusFilter').value==='error_review'&&S.errorReviewCounts?.total>0&&S.errorReviewCounts.pending===0;
+  strong.textContent=reviewed?'本轮错例复核已完成，结果已保存':scanWasRunning?'正在索引图片':'当前筛选没有图片';
+  span.textContent=reviewed?'可切换“本轮错例已复核”查看；位置框需另行框选保存。':scanWasRunning?'找到图片后即可开始分类。':'可切换“全部图片”、清除筛选或重新扫描目录。';
   $('imageMessage').append(strong,span);$('position').textContent='没有可显示的图片';$('fileName').textContent='原图不移动、不复制';$('commit').disabled=true;$('locate').disabled=true;$('note').value='';saveIndicator('未选择图片');renderTags();
 }
 async function selectIndex(index,{internal=false}={}){
@@ -368,10 +370,12 @@ async function commit(){
   if(S.labelStep!==2&&S.current.label.defects.length){await saveDraft();S.labelStep=2;renderTags();return;}
   S.busy=true;renderTags();
   try{
-    await saveDraft();const id=S.current.id,index=S.index;await api('/api/commit',{id,label:S.current.label,only_unclassified:!!S.current.recommendation_applied,expected_draft:S.current.recommendation_draft_fingerprint||null});S.dirty=false;
+    await saveDraft();const id=S.current.id,index=S.index;
+    const reviewRun=$('statusFilter').value==='error_review'?S.current.error_review?.run_id:null;
+    const saved=await api('/api/commit',{id,label:S.current.label,only_unclassified:!!S.current.recommendation_applied,expected_draft:S.current.recommendation_draft_fingerprint||null,review_run:reviewRun});S.dirty=false;
     const result=await api('/api/images?'+params({offset:index,limit:1}));let next=index;
     if(result.items[0]?.id===id)next=index+1;
-    await refreshState();await reload({index:Math.min(next,Math.max(0,result.total-1))});toast('已确认并保存标签');
+    await refreshState();await reload({index:Math.min(next,Math.max(0,result.total-1))});toast(saved.review_completed?'分类已保存，错例复核已完成；位置框另行补标':'已确认并保存标签');
   }finally{S.busy=false;renderTags();}
 }
 async function refreshState(){
@@ -380,6 +384,7 @@ async function refreshState(){
   S.links=state.responsibility_links||{};
   S.recommendationsEnabled=!!state.recommendations?.enabled;
   S.reviewEnabled=!!state.model_review?.enabled;
+  S.errorReviewCounts=state.error_review_counts;
   const tagsChanged=JSON.stringify(S.tags)!==JSON.stringify(state.tags);S.tags=state.tags;
   if(document.activeElement!==$('rootPath'))$('rootPath').value=state.root.display_path||state.root.path;
   $('sourceNote').textContent=state.server_mode?'原图在 NAS · 标签保存在 101':'直接查看原图 · 标签保存在本机';
@@ -387,6 +392,7 @@ async function refreshState(){
   if(!$('manifestPath').value)$('manifestPath').value=state.default_manifest;
   $('counts').textContent='已索引 '+state.counts.total+' · 已分类 '+state.counts.classified+' · 未分类 '+(state.counts.total-state.counts.classified);
   if(S.reviewEnabled)$('counts').textContent+=' · 模型无关待审核 '+state.model_review.pending;
+  if(state.error_review_counts?.total)$('counts').textContent+=' · 错例复核 '+(state.error_review_counts.total-state.error_review_counts.pending)+'/'+state.error_review_counts.total+' · 位置补标 '+(state.annotation_counts?.confirmed||0)+'张';
   $('reviewKind').hidden=!$('statusFilter').value.startsWith('error_review');
   const errorOption=$('statusFilter').querySelector('option[value="error_review"]');
   if(errorOption)errorOption.textContent='错例待复核 / 补标（'+(state.error_review_counts?.pending||0)+'）';

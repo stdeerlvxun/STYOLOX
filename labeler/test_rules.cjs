@@ -75,15 +75,23 @@ assert.equal(elements.recommendationTags.children.length,0);
 assert.equal(elements.adoptRecommendations.hidden,true);
 console.log('Recommendation pagination and protected-record rendering checks passed.');
 (async()=>{
-  const calls=[];
-  const workflow=vm.createContext({S:{current:{id:1,label:{defects:['划伤']}},labelStep:1,index:0},
+  const calls=[],bodies=[],messages=[],nodes={};
+  const node=id=>nodes[id]??={value:id==='statusFilter'?'error_review':'',replaceChildren(){},append(...children){this.children=children;}};
+  const workflow=vm.createContext({S:{current:{id:1,label:{defects:['划伤']},error_review:{run_id:'frozen-review'}},labelStep:1,index:0},
+    $:node,scanWasRunning:false,document:{createElement(){return {}; }},saveIndicator(){},
     renderTags(){},async saveDraft(){calls.push('draft');},
-    async api(path){calls.push(path);return path.startsWith('/api/images')?{items:[],total:0}:{};},
-    params(){return '';},async refreshState(){},async reload(){},toast(){}});
+    async api(path,body){calls.push(path);if(body)bodies.push(body);return path.startsWith('/api/images')?{items:[],total:0}:{review_completed:1};},
+    params(){return '';},async refreshState(){vm.runInContext('S.errorReviewCounts={total:1,pending:0}',workflow);},
+    async reload(){vm.runInContext('empty()',workflow);},toast(message){messages.push(message);}});
   vm.runInContext(source.slice(source.indexOf('async function commit('),source.indexOf('async function refreshState(')),workflow);
+  vm.runInContext(source.slice(source.indexOf('function empty('),source.indexOf('async function selectIndex(')),workflow);
   await vm.runInContext('commit()',workflow);
   assert.deepEqual(calls,['draft']);assert.equal(vm.runInContext('S.labelStep',workflow),2);
   await vm.runInContext('commit()',workflow);
   assert.equal(calls.filter(p=>p==='/api/commit').length,1);
+  assert.equal(bodies[0].review_run,'frozen-review');
+  assert.equal(nodes.imageMessage.children[0].textContent,'本轮错例复核已完成，结果已保存');
+  assert.equal(nodes.commit.disabled,true);assert.match(messages[0],/错例复核已完成/);
   console.log('Problem-first then responsibility confirmation checks passed.');
+  console.log('Last review classification save: exact run, empty queue and saved completion message passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

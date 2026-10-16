@@ -6,6 +6,9 @@ from PIL import Image
 from app import Store,RESPONSIBILITY_RULES
 from annotations import responsibility_links
 from deployment.snapshot import digest,annotation_digest
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parent/'deployment'))
+from recover_error_reviews import recover
 
 
 class LocalizationTest(unittest.TestCase):
@@ -87,6 +90,48 @@ class LocalizationTest(unittest.TestCase):
         self.assertEqual(other['image_count'],2);self.assertEqual(other['responsibility_case_counts']['运输'],1)
         self.assertTrue(other['requires_confirmation']);self.assertEqual(values['崩边']['suggestion'],'生产')
         self.assertEqual(self.store.detail(self.id)['label'],self.label)
+
+    def queue(self):
+        with self.store.db:
+            self.store.db.execute("INSERT INTO settings VALUES('error_review_run','test-run')")
+            self.store.db.execute("INSERT INTO error_reviews(image_id,run_id,data) VALUES(?,'test-run',?)",
+                (self.id,json.dumps({'kinds':['problem_miss']})))
+
+    def test_classification_review_commit_is_atomic_and_undo_restores_queue(self):
+        self.queue();annotation_before=annotation_digest(self.store.db)
+        result=self.store.commit([(self.id,self.label)],review_run='test-run')
+        self.assertEqual(result['review_completed'],1)
+        self.assertEqual(self.store.listing({'status':['error_review']})['total'],0)
+        self.assertEqual(annotation_digest(self.store.db),annotation_before)
+        self.assertEqual(self.store.detail(self.id)['error_review']['status'],'reviewed')
+        self.store.undo()
+        self.assertEqual(self.store.listing({'status':['error_review']})['total'],1)
+        before=digest(self.store.db)
+        with self.assertRaisesRegex(ValueError,'批次已变化'):
+            self.store.commit([(self.id,self.label)],review_run='stale-run')
+        self.assertEqual(digest(self.store.db),before)
+
+    def test_history_recovery_preserves_labels_and_never_creates_boxes(self):
+        self.queue();boundary=self.store.one('SELECT MAX(id) id FROM history')['id']
+        self.store.commit([(self.id,self.label)])
+        before=self.human();annotations_before=annotation_digest(self.store.db)
+        preview=recover(self.store.data_dir,'test-run',boundary)
+        self.assertEqual(preview['recoverable'],1)
+        self.assertEqual(self.store.annotations.review(self.id)['status'],'pending')
+        result=recover(self.store.data_dir,'test-run',boundary,True,1)
+        self.assertTrue(result['applied']);self.assertEqual(self.human(),before)
+        self.assertEqual(annotation_digest(self.store.db),annotations_before)
+        self.assertEqual(self.store.query('SELECT * FROM annotation_documents'),[])
+        self.assertEqual(self.store.annotations.review(self.id)['status'],'reviewed')
+
+    def test_history_recovery_requires_exact_current_confirmed_label(self):
+        self.queue();boundary=self.store.one('SELECT MAX(id) id FROM history')['id']
+        self.store.commit([(self.id,self.label)])
+        self.store.save_draft(self.id,{**self.label,'note':'新编辑尚未确认'})
+        self.assertEqual(recover(self.store.data_dir,'test-run',boundary)['recoverable'],0)
+        with self.assertRaisesRegex(ValueError,'Recoverable count changed'):
+            recover(self.store.data_dir,'test-run',boundary,True,1)
+        self.assertEqual(self.store.annotations.review(self.id)['status'],'pending')
 
 
 if __name__=='__main__':unittest.main()
