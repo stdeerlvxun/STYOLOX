@@ -113,7 +113,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "a48a86747177bfeba8cf479a7cf25757a51ce6ea",
+    "source_commit": "295edf44243c3ddb5aecd485e5a0490148da5bf4",
     "files": [
       {
         "path": ".gitignore",
@@ -129,7 +129,7 @@
       },
       {
         "path": "README.md",
-        "sha256": "a4dc19af508879933220616167ae71d6980fe539cd7eca5e8c8599420084d12d"
+        "sha256": "b6b1cfb13d10b2baf5776f695d08913172c65dfaaa7ee3986975e0878be51763"
       },
       {
         "path": "annotations.py",
