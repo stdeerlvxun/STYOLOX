@@ -365,6 +365,14 @@ def execute_cycle(config, config_path, payload, items, run, report):
     promote, reason = promotion_decision(comparison, config.get('minimum_validation_recall', .5),
                                         config.get('minimum_validation_boxes', 10))
     report.update(validation_comparison=comparison, promotion_reason=reason, promoted=False)
+    # A joint issue/location model must not trade away localization recall.
+    if promote and comparison.get('comparison_objective') == 'issue_type_and_location':
+        old_location = comparison['base']['location_only']
+        new_location = comparison['candidate']['location_only']
+        if (new_location['recall'] < old_location['recall'] or
+            new_location['f2'] < old_location['f2'] or new_location['fp'] > old_location['fp']):
+            promote = False
+            report['promotion_reason'] = 'Location recall/F2 or false positives regressed; retain current model'
     if not promote:
         report['status'] = 'trained_not_promoted'
         return report
@@ -483,6 +491,13 @@ def cycle(config_path, check_only=False, refill_only=False):
             report['status'] = 'review_refilled_training_error'
         if not check_only:
             atomic_json(Path(config['runs_root'])/'latest-state.json', report)
+    if not check_only:
+        from training_report import publish_reports
+        try:
+            report['training_reports'] = publish_reports(config)
+        except Exception as error:
+            report['training_reports'] = {'status': 'retry_next_tick', 'error': str(error)}
+        atomic_json(Path(config['runs_root'])/'latest-state.json', report)
     return report
 
 

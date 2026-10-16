@@ -134,8 +134,14 @@ def evaluate_predictions(records, predictions, categories, threshold):
                          'group': record['group'], 'truth': record['boxes'],
                          'predictions': selected, 'class_and_location': result,
                          'location_only': region_result})
+    image_pass = {}
+    for objective in ('class_and_location', 'location_only'):
+        passed = sum(row[objective]['fn'] == 0 and row[objective]['fp'] == 0 for row in detailed)
+        image_pass[objective] = {'passed': passed, 'total': len(detailed),
+                                 'rate': passed / len(detailed) if detailed else None}
     return {'class_and_location': rates(totals['tp'], totals['fn'], totals['fp']),
             'location_only': rates(localization['tp'], localization['fn'], localization['fp']),
+            'whole_image_pass': image_pass,
             'per_class': {c['name']: rates(per_class[c['id']]['tp'], per_class[c['id']]['fn'],
                                            per_class[c['id']]['fp']) for c in categories},
             'unknown_class_false_positives': totals['unknown_class_fp'],

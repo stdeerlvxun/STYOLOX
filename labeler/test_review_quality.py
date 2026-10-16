@@ -19,7 +19,7 @@ class ReviewQualityTest(unittest.TestCase):
 
     def tearDown(self):self.store.db.close();self.temp.cleanup()
 
-    def image(self,name,model='model-v1',case_id='case-1',unknown=False):
+    def image(self,name,model='model-v1',case_id='case-1',unknown=False,typed=False):
         path=self.source/(name+'.jpg');Image.new('RGB',(400,200),'white').save(path);stat=path.stat()
         with self.store.db:
             cursor=self.store.db.execute('INSERT INTO images(root_id,relative_path,file_name,case_id,size,mtime_ns) VALUES(?,?,?,?,?,?)',
@@ -29,7 +29,9 @@ class ReviewQualityTest(unittest.TestCase):
         detail=self.store.annotations.detail(identity)
         manifest={'schema_version':1,'requires_human_review':True,'model_id':model,'method':'location-first','items':[
             {'image_id':identity,'relative_path':path.name,'source':detail['source'],'label_fingerprint':detail['label_fingerprint'],
-            'boxes':[{'id':'box-'+name,'problem':'' if unknown else '崩边','x':.1,'y':.2,'w':.3,'h':.4,'origin':'model'}]}]}
+            'boxes':[{'id':'box-'+name,'problem':'' if unknown and not typed else '崩边','x':.1,'y':.2,'w':.3,'h':.4,'origin':'model'}]}]}
+        if typed:manifest['items'][0]['boxes'][0]['type_provenance']={
+            'source':'detector_class_prediction','model_sha256':'a'*64,'score':.8}
         self.assertEqual(self.store.annotations.install_proposals(manifest)['imported'],1)
         return identity
 
@@ -41,6 +43,9 @@ class ReviewQualityTest(unittest.TestCase):
 
     def accept(self,identity,**changes):
         body=self.body(identity);body.update(changes)
+        if any(box.get('type_provenance') for box in body['boxes']) and 'classification_updates' not in body:
+            problems=list(dict.fromkeys(box['problem'] for box in body['boxes']))
+            body['classification_updates']={'defects':problems,'problem_responsibilities':{p:['生产'] for p in problems}}
         return self.store.annotations.save(identity,body)
 
     def reject(self,identity):
@@ -81,6 +86,34 @@ class ReviewQualityTest(unittest.TestCase):
         self.accept(identity,boxes=body['boxes'])
         group=self.quality.state()['current']
         self.assertEqual((group['whole_image_unchanged'],group['problem_type_changed'],group['inherited_problem_labels']),(1,1,1))
+        self.assertEqual((group['whole_image_no_change'],group['predicted_type_reviewed_boxes']),(0,0))
+        self.assertIsNone(group['predicted_type_correct_rate'])
+
+    def test_genuine_types_count_human_changes_and_rejections_as_failed_predictions(self):
+        first=self.image('typed-correct',case_id='one',unknown=True,typed=True);self.accept(first)
+        second=self.image('typed-wrong',case_id='two',unknown=True,typed=True)
+        body=self.body(second);body['boxes'][0]['problem']='缺角';self.accept(second,boxes=body['boxes'])
+        third=self.image('typed-rejected',case_id='three',unknown=True,typed=True);self.reject(third)
+        fourth=self.image('typed-missed',case_id='four',unknown=True,typed=True);body=self.body(fourth)
+        body['boxes'].append({'id':'manual-added','problem':'崩边','x':.6,'y':.6,'w':.1,'h':.1});self.accept(fourth,boxes=body['boxes'])
+        group=self.quality.state()['current']
+        self.assertEqual((group['reviewed_images'],group['whole_image_unchanged'],group['whole_image_no_change']),(4,2,1))
+        self.assertEqual((group['predicted_type_reviewed_boxes'],group['predicted_type_correct_boxes'],
+            group['predicted_type_changed_boxes'],group['predicted_type_rejected_boxes']),(4,2,1,1))
+        self.assertEqual(group['predicted_type_correct_rate'],.5)
+        self.assertEqual((group['fully_predicted_images'],group['fully_predicted_unchanged_images']),(4,1))
+        self.assertEqual(group['fully_predicted_unchanged_rate'],.25)
+        self.assertEqual((group['fully_predicted_cases'],group['fully_predicted_unchanged_cases']),(4,1))
+        self.assertEqual(group['inherited_problem_labels'],0)
+        self.assertEqual(group['type_model_ids'],['a'*64])
+
+    def test_legacy_human_labels_do_not_inflate_genuine_prediction_metrics(self):
+        inherited=self.image('inherited');self.accept(inherited)
+        typed=self.image('typed',typed=True);self.accept(typed)
+        groups=self.quality.state()['groups'];self.assertEqual(len(groups),2)
+        legacy=next(g for g in groups if not g['type_model_ids'])
+        self.assertEqual(legacy['whole_image_no_change'],1)
+        self.assertEqual((legacy['fully_predicted_images'],legacy['predicted_type_reviewed_boxes']),(0,0))
 
     def test_model_groups_are_separate_and_latest_generated_is_not_mislabeled_reviewed(self):
         first=self.image('old',model='model-old');self.accept(first)
@@ -157,8 +190,11 @@ class ReviewQualityTest(unittest.TestCase):
 
     def test_business_gate_never_enables_auto_without_independent_validation(self):
         group={'reviewed_images':300,'reviewed_machine_boxes':300,'whole_image_unchanged':300,
-            'unchanged_position_boxes':300,'images_without_case_id':0}
-        result=ReviewQuality._finish(group,{str(n):[True,True,True] for n in range(100)})
+            'unchanged_position_boxes':300,'images_without_case_id':0,'whole_image_no_change':300,
+            'predicted_type_reviewed_boxes':300,'predicted_type_correct_boxes':300,
+            'fully_predicted_images':300,'fully_predicted_unchanged_images':300}
+        cases={str(n):[True,True,True] for n in range(100)}
+        result=ReviewQuality._finish(group,cases,cases)
         self.assertTrue(result['position_sample_gate_met'])
         self.assertFalse(result['auto_enabled'])
         self.assertGreater(result['case_rate_lower95'],.95)

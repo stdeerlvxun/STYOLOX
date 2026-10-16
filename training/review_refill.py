@@ -19,7 +19,7 @@ import uuid
 
 import correction_cycle as worker
 
-SELECTION_POLICY = 'all_unreviewed_images_v2'
+SELECTION_POLICY = 'all_unreviewed_typed_images_v3'
 
 
 def settings(config):
@@ -128,6 +128,7 @@ def safe_source_path(root, relative):
 
 def generate(config, snapshot, output, attempts_path, model=None):
     from PIL import Image, ImageOps
+    from typed_proposals import normalize_typed_predictions
     policy = settings(config); run = Path(config['current_detector_run']); output = Path(output)
     if output.exists():
         raise ValueError('Refill manifest already exists')
@@ -138,9 +139,6 @@ def generate(config, snapshot, output, attempts_path, model=None):
     state = worker.read_json(attempts_path) if Path(attempts_path).exists() else {}
     attempts = state.get('attempts', {}) if state.get('model_sha256') == model_sha else {}
     rows, selection = select_refill_rows(snapshot)
-    # Refill always supplies review-only locations; a detector class is not a
-    # substitute for the user's issue choice on an unclassified/multi-issue image.
-    location_first = True
     now = time.time()
     def untried(row):
         entry = attempts.get(attempt_key(model_sha, row, config['source_root']))
@@ -149,17 +147,19 @@ def generate(config, snapshot, output, attempts_path, model=None):
         return (not entry or entry.get('status') == 'proposed'
                 or entry.get('status') == 'error' and entry.get('retry_after', 0) <= now)
     candidates = [row for row in rows if untried(row)]
-    result = {'schema_version': 1, 'model_id': ('yolox-location-' if location_first else 'yolox-human-boxes-')+model_sha[:12],
-        'method': 'yolox_problem_location_v2' if location_first else 'yolox_supervised_human_boxes_v1',
+    result = {'schema_version': 1, 'model_id': 'yolox-human-boxes-'+model_sha[:12],
+        'method': 'yolox_typed_problem_suggestions_v3',
         'source_checkpoint_sha256': model_sha, 'source_snapshot_sha256': file_hash(snapshot),
         'requires_human_review': True, 'unreviewed_proposals_training_eligible': False,
         'refresh_pending': False, 'classification_results_modified': False, 'source_images_modified': False,
-        'coordinate_space': 'exif_transposed_normalized_xywh', 'location_first_suggestions': location_first,
-        'selection_policy': SELECTION_POLICY, 'problem_name_source': 'single_human_label_or_human_assignment',
+        'coordinate_space': 'exif_transposed_normalized_xywh', 'location_first_suggestions': False,
+        'selection_policy': SELECTION_POLICY, 'problem_name_source': 'model_prediction_with_per_box_provenance',
         'created_at': dt.datetime.now(dt.timezone.utc).isoformat(), 'selection': selection, 'items': [], 'errors': []}
     if candidates and model is None:
         from train_detector import load_detector
         model = load_detector(run, device='cuda')
+    if candidates and getattr(model,'class_agnostic',False):
+        raise ValueError('A typed detector is required; retain the current issue-class model before refill')
     processed = 0; empty = 0
     for row in candidates[:policy['scan_limit']]:
         if len(result['items']) >= policy['batch_size']:
@@ -178,13 +178,14 @@ def generate(config, snapshot, output, attempts_path, model=None):
                 image = ImageOps.exif_transpose(opened).convert('RGB')
             cutoff = config.get('fixed_threshold')
             predictions = model.predict_image(image, **({'threshold': cutoff} if cutoff is not None else {}))
-            boxes = normalize_location_predictions(predictions, row['problems'])
+            boxes = normalize_typed_predictions(predictions,model_sha,
+                class_agnostic=bool(getattr(model,'class_agnostic',False)))
             entry.update(status='proposed' if boxes else 'no_boxes', source_sha256=sha)
             if boxes:
                 result['items'].append({'image_id': row['image_id'], 'relative_path': row['relative_path'],
                     'label_fingerprint': row['label_fingerprint'],
                     'source': {'sha256': sha, 'width': image.width, 'height': image.height}, 'boxes': boxes,
-                    'note': '模型仅建议问题位置；唯一人工问题可沿用，未分类或多个问题时请逐框选择问题点。已有分类保留。'})
+                    'note': '问题点与位置来自检测模型的真实预测，请审核纠正。模型分数不等于准确率；已有人工分类保留。'})
             else:
                 empty += 1
         except (OSError, ValueError, KeyError) as error:
@@ -197,6 +198,8 @@ def generate(config, snapshot, output, attempts_path, model=None):
         'already_attempted_images': len(rows)-len(candidates), 'attempted_images': processed,
         'remaining_eligible_images': max(0, len(candidates)-processed), 'generated_images': len(result['items']),
         'generated_boxes': sum(len(item['boxes']) for item in result['items']), 'images_without_boxes': empty,
+        'typed_boxes':sum(bool(box['problem']) for item in result['items'] for box in item['boxes']),
+        'unassigned_boxes':sum(not box['problem'] for item in result['items'] for box in item['boxes']),
         'errors': len(result['errors']), 'scan_limit': policy['scan_limit'], 'batch_size': policy['batch_size']}
     worker.atomic_json(output, result)
     worker.atomic_json(attempts_path, {'model_sha256': model_sha, 'selection_policy': SELECTION_POLICY, 'attempts': attempts})

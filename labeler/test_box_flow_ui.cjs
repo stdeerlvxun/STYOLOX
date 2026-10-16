@@ -17,7 +17,7 @@ class Element{
   el('labelPanel').hidden=true;
   const label={defects:['崩边','划伤'],responsibilities:['生产'],problem_responsibilities:{崩边:['生产'],划伤:[]},image_state:'defect',note:'原备注'};
   const human={id:'retained-human',problem:'崩边',x:.01,y:.01,w:.08,h:.08,origin:'human'};
-  let fixtureBoxes=[structuredClone(human)],fixtureRegions=[],fixtureProposal=null,fixtureProposalId=null;
+  let fixtureBoxes=[structuredClone(human)],fixtureRegions=[],fixtureProposal=null,fixtureProposalId=null,fixtureProposalFingerprint=null;
   let version=0,ids=0,navigations=0,reads=0,rejectConfirmation=false,retainedInQueue=true;const navigationIndexes=[];
   const context=vm.createContext({structuredClone,Promise,setTimeout(){return 1;},clearTimeout(){},
     document:{getElementById:el,createElement:tag=>new Element(tag),createElementNS:(_,tag)=>new Element(tag),addEventListener(type,handler){if(type==='keydown')keys.push(handler);},body:new Element('body')},
@@ -26,7 +26,7 @@ class Element{
     clientId:()=>'new-'+(++ids),fail:e=>failures.push(e),toast(){},renderTags(){},params:args=>new URLSearchParams(args).toString(),async refreshState(){},async reload({index}){navigations++;navigationIndexes.push(index);},
     async api(path,body){if(path==='/api/annotation-feedback/state')return {confirmed_corrections:6};
       if(path.startsWith('/api/images?'))return {items:[{id:retainedInQueue?7:8}],total:3};
-      if(!body){reads++;return {source:{sha256:'source',width:1600,height:900},document:{boxes:structuredClone(fixtureBoxes),negative_regions:structuredClone(fixtureRegions),outcome:'boxed',proposal_id:fixtureProposalId},proposal:structuredClone(fixtureProposal),version,label_fingerprint:'old-label'};}
+      if(!body){reads++;return {source:{sha256:'source',width:1600,height:900},document:{boxes:structuredClone(fixtureBoxes),negative_regions:structuredClone(fixtureRegions),outcome:'boxed',proposal_id:fixtureProposalId,proposal_content_fingerprint:fixtureProposalFingerprint},proposal:structuredClone(fixtureProposal),version,label_fingerprint:'old-label'};}
       assert.equal(path,'/api/annotations');assert.equal(body.expected_version,version);writes.push(structuredClone(body));
       if(body.status==='confirmed'&&rejectConfirmation){rejectConfirmation=false;throw new Error('分类草稿已经变化，请重新读取');}
       version++;return {version,label_fingerprint:body.status==='confirmed'?'confirmed-label':'old-label',...(body.status==='confirmed'?{label:structuredClone(label)}:{})};
@@ -213,6 +213,28 @@ class Element{
   await button('boxEditorProblems','崩边').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
   assert.deepEqual(writes.at(-1).boxes[0],human,'Assigning a new candidate preserves every existing human box');
   assert.deepEqual(context.S.current.label,label);assert.equal(failures.length,0);
+  // Predicted types are initially selected and can confirm an unclassified image atomically.
+  context.S.current.label=structuredClone(unclassifiedLabel);fixtureBoxes=[];fixtureRegions=[];fixtureProposalId=null;
+  fixtureProposal={proposal_id:'typed-proposal',content_fingerprint:'typed-content-fingerprint',model_id:'typed-detector',method:'typed',status:'pending',source_sha256:'source',label_fingerprint:'old-label',boxes:[{...proposalBox,id:'typed-1',problem:'崩边'}]};
+  await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);const typedWrites=writes.length;
+  await clickPoint(.5,.425,70);assert.equal(button('boxEditorProblems','崩边').attributes['aria-pressed'],'true','Popup selects the actual prediction, not the first tag');
+  assert.equal(button('boxEditorProblems','残胶').attributes['aria-pressed'],'false');assert.equal(writes.length,typedWrites);assert.deepEqual(context.S.current.label,unclassifiedLabel);
+  await button('boxEditorResponsibilities','运输').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.deepEqual(writes.at(-1).classification_updates.problem_responsibilities,{崩边:['运输']});assert.deepEqual(context.S.current.label,unclassifiedLabel,'Editable default responsibility does not change human labels before confirmation');
+  assert.equal(writes.at(-1).expected_proposal_fingerprint,'typed-content-fingerprint','A typed proposal draft is bound to the exact visible prediction');
+  await key('Enter');assert.equal(writes.at(-1).status,'confirmed');assert.deepEqual(writes.at(-1).classification_updates.problem_responsibilities,{崩边:['运输']});assert.equal(writes.at(-1).expected_proposal_fingerprint,'typed-content-fingerprint');
+  context.S.current.label=structuredClone(unclassifiedLabel);await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);
+  await key('Enter');assert.equal(writes.at(-1).status,'confirmed');assert.deepEqual(writes.at(-1).classification_updates.problem_responsibilities,{崩边:['生产']},'Direct Enter includes the predicted issue and standard responsibility');
+  // A typed legacy draft without stored responsibilities follows the same confirmation contract.
+  context.S.current.label=structuredClone(unclassifiedLabel);fixtureBoxes=[{...proposalBox,id:'typed-1',problem:'崩边',proposal_id:'typed-proposal',source_box_id:'typed-1'}];fixtureProposalId='typed-proposal';
+  await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);await key('Enter');assert.equal(writes.at(-1).status,'confirmed');assert.deepEqual(writes.at(-1).classification_updates.problem_responsibilities,{崩边:['生产']});assert.equal(failures.length,0);
+  fixtureProposal=null;fixtureProposalFingerprint='stored-proposal-fingerprint';context.S.current.label=structuredClone(unclassifiedLabel);await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);await key('Enter');assert.equal(writes.at(-1).expected_proposal_fingerprint,'stored-proposal-fingerprint','Reloaded annotation retains its visible proposal fingerprint even without a pending proposal');assert.equal(failures.length,0);
+  fixtureBoxes=[];fixtureProposalId=null;fixtureProposalFingerprint=null;context.S.current.label=structuredClone(unclassifiedLabel);
+  fixtureProposal={proposal_id:'reject-typed-proposal',content_fingerprint:'reject-visible-fingerprint',model_id:'typed-detector',method:'typed',status:'pending',source_sha256:'source',label_fingerprint:'old-label',boxes:[{...proposalBox,id:'rejected-typed-1',problem:'崩边'}]};
+  await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);await el('rejectAutoBoxes').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.equal(writes.at(-1).status,'draft');assert.equal(writes.at(-1).expected_proposal_fingerprint,'reject-visible-fingerprint');assert.equal(writes.at(-1).boxes.length,0);assert.deepEqual(context.S.current.label,unclassifiedLabel);
+  await key('Enter');assert.equal(writes.at(-1).status,'confirmed');assert.equal(writes.at(-1).expected_proposal_fingerprint,'reject-visible-fingerprint','Reject-all uses the same visible prediction guard through the annotation confirmation endpoint');assert.equal(writes.at(-1).negative_regions.length,1);assert.equal(failures.length,0);
+  console.log('Typed model defaults, editable responsibility, atomic unclassified confirmation and legacy draft upgrade passed.');
   console.log('Untyped all-image boxes: explicit type and responsibility, Enter focus/error, resumable draft, empty classification prevention and human-box preservation passed.');
   console.log('Conflict repair, move and Delete preserve other model candidates and can proceed to confirmation.');
   console.log('Pre-submit overlap detection, exact conflict highlighting, explicit recovery/undo, pending proposal protection and duplicate-deletion prevention passed.');

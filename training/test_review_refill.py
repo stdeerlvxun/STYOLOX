@@ -70,20 +70,21 @@ class RefillTests(unittest.TestCase):
             self.assertEqual(summary['excluded']['existing_machine_proposal'], 4)
             self.assertEqual(summary['excluded']['image_state_selected'], 1)
 
-    def test_bounded_newest_first_generation_and_original_problem_context(self):
+    def test_bounded_newest_first_generation_keeps_actual_predicted_problem(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); value, snapshot = fixture(root, 7)
             value.update(review_refill_batch_size=2, review_refill_scan_limit=4)
             detector = FakeDetector()
             result = refill.generate(value, snapshot, root/'output.json', root/'attempts.json', detector)
             self.assertEqual([row['image_id'] for row in result['items']], [7, 6])
-            self.assertEqual(result['items'][0]['boxes'][0]['problem'], '崩边', 'Existing single human problem is retained in location-first mode')
+            self.assertEqual(result['items'][0]['boxes'][0]['problem'], '其他破损', 'The detector class is retained instead of copying the human image label')
+            self.assertEqual(result['items'][0]['boxes'][0]['type_provenance']['source'],'detector_class_prediction')
             self.assertEqual(result['summary']['attempted_images'], 2)
             self.assertEqual(result['summary']['remaining_eligible_images'], 5)
             self.assertFalse(result['refresh_pending']); self.assertTrue(result['requires_human_review'])
             self.assertEqual(detector.thresholds, [.05, .05])
 
-    def test_unclassified_and_multilabel_images_generate_unknown_location_boxes_without_writes(self):
+    def test_unclassified_and_multilabel_images_generate_real_typed_boxes_without_writes(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); value, snapshot = fixture(root, 4)
             db = sqlite3.connect(snapshot)
@@ -95,7 +96,7 @@ class RefillTests(unittest.TestCase):
             detector = FakeDetector()
             result = refill.generate(value, snapshot, root/'output.json', root/'attempts.json', detector)
             self.assertEqual([item['image_id'] for item in result['items']], [4, 3, 2, 1])
-            self.assertEqual([item['boxes'][0]['problem'] for item in result['items']], ['', '', '', '崩边'])
+            self.assertEqual([item['boxes'][0]['problem'] for item in result['items']], ['其他破损']*4)
             self.assertEqual(result['items'][0]['label_fingerprint'], hashlib.sha256(b'').hexdigest())
             self.assertEqual(result['summary']['eligible_images'], 4)
             self.assertEqual(result['selection_policy'], refill.SELECTION_POLICY)
@@ -103,6 +104,8 @@ class RefillTests(unittest.TestCase):
             self.assertEqual(snapshot.read_bytes(), before, 'All human data is read-only')
             self.assertFalse(result['classification_results_modified'])
             self.assertFalse(result['source_images_modified'])
+            self.assertEqual(result['summary']['typed_boxes'],4)
+            self.assertEqual(result['summary']['unassigned_boxes'],0)
 
     def test_historical_manual_reviews_and_proposals_never_reenter(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -276,6 +279,14 @@ class RefillTests(unittest.TestCase):
             (Path(value['current_detector_run'])/'detector.pt').write_bytes(b'modified without validation')
             with self.assertRaisesRegex(ValueError, 'validated model metadata'):
                 refill.generate(value, snapshot, root/'output.json', root/'attempts.json', FakeDetector())
+
+    def test_location_only_model_blocks_instead_of_publishing_blank_types(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);value,snapshot=fixture(root,1);model=FakeDetector();model.class_agnostic=True
+            with self.assertRaisesRegex(ValueError,'typed detector'):
+                refill.generate(value,snapshot,root/'output.json',root/'attempts.json',model)
+            self.assertEqual(model.calls,0)
+            self.assertFalse((root/'output.json').exists());self.assertFalse((root/'attempts.json').exists())
 
 
 if __name__ == '__main__':

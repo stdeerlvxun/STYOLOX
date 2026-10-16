@@ -6,7 +6,7 @@ const S = {token:'',root:null,tags:{defect:[],responsibility:[]},rules:{},respon
   pages:new Map(),pagePending:new Map(),total:0,index:0,current:null,selected:new Set(),view:0,focus:0,client:clientId(),
   dirty:false,revision:0,saveTail:Promise.resolve(),saveTimer:null,busy:false,navigating:false,nav:0,blobs:new Map(),pending:new Map(),
   controllers:new Map(),thumbJobs:[],thumbActive:0,zoom:1,rotation:0,panX:0,panY:0,original:false,importKey:null,loaded:false,
-  recommendationsEnabled:false,recommendation:null,recommendationTimer:null,recommendationPage:0,responsibilityProblem:'',labelStep:1,reviewEnabled:false,links:{},reviewBatches:null,reviewArchivePage:0,reviewQueueReloadPending:false,reviewQuality:null,reviewQualityModel:'',reviewQualityTab:'results',reviewQualityLoading:false,reviewQualityError:''};
+  recommendationsEnabled:false,recommendation:null,recommendationTimer:null,recommendationPage:0,responsibilityProblem:'',labelStep:1,reviewEnabled:false,links:{},reviewBatches:null,reviewArchivePage:0,reviewQueueReloadPending:false,reviewQuality:null,reviewQualityModel:'',reviewQualityTab:'results',reviewQualityBasisPage:0,reviewQualityLoading:false,reviewQualityError:'',trainingRounds:null,trainingRoundId:'',trainingRoundsLoading:false,trainingRoundsError:''};
 let toastTimer, searchTimer, renderFrame, scanWasRunning=false, lastIndexed=0,lastReviewQueueSignature='';
 async function api(path,body){
   const options = body === undefined ? {} : {method:'POST',headers:{'Content-Type':'application/json','X-Local-Token':S.token},body:JSON.stringify(body)};
@@ -49,17 +49,44 @@ function renderReviewQuality(){
   model.replaceChildren();for(const group of groups){const option=document.createElement('option');option.value=group.key;option.textContent=String(group.model_id||'未命名模型')+' · '+Number(group.reviewed_images||0)+' 张';model.append(option);}
   S.reviewQualityModel=selected?.key||'';model.value=S.reviewQualityModel;model.title=selected?String(selected.model_id||'')+' · '+String(selected.method||''):'';model.disabled=S.reviewQualityLoading||!groups.length;
   $('reviewQualityRefresh').disabled=S.reviewQualityLoading;
-  const status=S.reviewQualityError?'读取失败，请点刷新重试：'+S.reviewQualityError:S.reviewQualityLoading?'正在统计已提交审核…':!selected?'暂无已提交的机器框审核；完成审核后点击刷新。':data.latest_generated_group_key&&data.latest_generated_group_key!==selected.key?'当前显示已审模型；最新生成模型另组统计。':'按模型分组；默认显示最近完成人审的一组。';
+  const status=S.reviewQualityError?'读取失败，请点刷新重试：'+S.reviewQualityError:S.reviewQualityLoading?'正在统计已提交审核…':!selected?'暂无已提交的机器框审核；完成审核后点击刷新。':data.latest_generated_group_key&&data.latest_generated_group_key!==selected.key?'当前显示已审模型；最新生成模型另组统计。':'按模型分组；默认显示已有审核结果的最新模型。';
   $('reviewQualityStatus').textContent=status;$('reviewQualityStatus').title=status;$('reviewQualityStatus').dataset.error=String(!!S.reviewQualityError);
   $('reviewQualityCoverage').textContent='已审核 '+Number(selected?.reviewed_images||0)+' 张 · 覆盖 '+Number(selected?.distinct_cases||0)+' 个售后单';
   $('reviewQualityImageRate').textContent=reviewQualityRate(selected?.whole_image_unchanged,selected?.reviewed_images);
+  $('reviewQualityFullRate').textContent=reviewQualityRate(selected?.fully_predicted_unchanged_images,selected?.fully_predicted_images);
+  $('reviewQualityTypeRate').textContent=reviewQualityRate(selected?.predicted_type_correct_boxes,selected?.predicted_type_reviewed_boxes);
   $('reviewQualityBoxRate').textContent=reviewQualityRate(selected?.unchanged_position_boxes,selected?.reviewed_machine_boxes);
   $('reviewQualityChanges').textContent='移位 '+Number(selected?.moved_machine_boxes||0)+' 框 · 删除 '+Number(selected?.deleted_machine_boxes||0)+' 框 · 人工补出 '+Number(selected?.human_added_boxes||0)+' 框';
-  $('reviewQualityTypes').textContent='人工赋类型 '+Number(selected?.problem_type_assigned||0)+' 框 · 类型纠正 '+Number(selected?.problem_type_changed||0)+' 框';
-  const lower=selected?.case_rate_lower95;$('reviewQualityConfidence').textContent='按售后单统计的原样通过率 · 95% 单侧下界：'+(typeof lower==='number'?((100*lower).toFixed(1)+'%'):'暂无样本');
-  const list=$('reviewQualityShortfalls');list.replaceChildren();for(const text of selected?.shortfalls?.length?selected.shortfalls:['需要更多人工审核和独立验证，继续人工审核。']){const item=document.createElement('li');item.textContent=String(text);list.append(item);}
+  $('reviewQualityTypes').textContent='整图无修改提交 '+Number(selected?.whole_image_no_change||0)+' / '+Number(selected?.reviewed_images||0)+' 张 · 人工赋类型 '+Number(selected?.problem_type_assigned||0)+' 框 · 类型纠正 '+Number(selected?.problem_type_changed||0)+' 框';
+  const lower=selected?.fully_predicted_case_lower95;$('reviewQualityConfidence').textContent='完整预测按售后单统计 · 95% 单侧下界：'+(typeof lower==='number'?((100*lower).toFixed(1)+'%'):'暂无样本');
+  const shortfalls=selected?.shortfalls?.length?selected.shortfalls:['需要更多人工审核和独立验证，继续人工审核。'],pages=Math.max(1,Math.ceil(shortfalls.length/5));S.reviewQualityBasisPage=Math.min(Math.max(0,S.reviewQualityBasisPage||0),pages-1);
+  const list=$('reviewQualityShortfalls');list.replaceChildren();for(const text of shortfalls.slice(S.reviewQualityBasisPage*5,S.reviewQualityBasisPage*5+5)){const item=document.createElement('li');item.textContent=String(text);list.append(item);}
+  $('reviewQualityBasisPager').hidden=pages===1;$('reviewQualityBasisPage').textContent=(S.reviewQualityBasisPage+1)+' / '+pages;$('reviewQualityBasisPrevious').disabled=S.reviewQualityBasisPage===0;$('reviewQualityBasisNext').disabled=S.reviewQualityBasisPage===pages-1;
   $('reviewQualityScope').textContent='这是已审核样本的通过率，不是独立测试准确率；不会据此自动开启终判。';
-  const basis=S.reviewQualityTab==='basis';$('reviewQualityResults').hidden=basis;$('reviewQualityBasis').hidden=!basis;$('reviewQualityResultsTab').setAttribute('aria-pressed',String(!basis));$('reviewQualityBasisTab').setAttribute('aria-pressed',String(basis));
+  const tab=S.reviewQualityTab||'results',training=tab==='training';
+  for(const [name,id]of [['results','Results'],['basis','Basis'],['training','Training']]){$('reviewQuality'+id).hidden=tab!==name;$('reviewQuality'+id+'Tab').setAttribute('aria-pressed',String(tab===name));}
+  model.hidden=training;$('trainingRoundSelect').hidden=!training;if(training)renderTrainingRounds();
+}
+function trainingPercent(value){return typeof value==='number'&&Number.isFinite(value)?(100*value).toFixed(1)+'%':'未记录';}
+function renderTrainingRounds(){
+  const data=S.trainingRounds,rounds=data?.rounds||[],select=$('trainingRoundSelect'),round=rounds.find(value=>value.round_id===S.trainingRoundId)||rounds[0]||null;
+  select.replaceChildren();for(const value of rounds){const option=document.createElement('option');option.value=value.round_id;option.textContent=String(value.round_id||'训练轮次');select.append(option);}S.trainingRoundId=round?.round_id||'';select.value=S.trainingRoundId;select.title=S.trainingRoundId;select.disabled=S.trainingRoundsLoading||!rounds.length;
+  $('reviewQualityRefresh').disabled=S.trainingRoundsLoading;
+  const message=S.trainingRoundsError?'训练记录读取失败，请点刷新重试：'+S.trainingRoundsError:S.trainingRoundsLoading?'正在读取训练记录…':!round?'暂无训练记录；达到触发数量后将记录每轮对比。':'固定验证集对比与新模型人工审核分开统计。';
+  $('reviewQualityStatus').textContent=message;$('reviewQualityStatus').title=message;$('reviewQualityStatus').dataset.error=String(!!S.trainingRoundsError);
+  const statuses={training:'训练中',running:'运行中',completed:'已完成',success:'已完成',succeeded:'已完成',promoted:'验证通过',trained_and_promoted:'训练完成并启用',trained_not_promoted:'训练完成，候选未启用',trained:'训练已完成',not_promoted:'未启用候选',validation_failed:'验证未通过',failed:'训练失败',error:'训练异常',skipped:'本轮未训练',waiting:'等待训练',waiting_for_gpu:'等待 GPU',insufficient_feedback:'等待更多确认样本',insufficient_confirmed_images:'等待更多确认样本',waiting_for_worker:'等待后台任务'};
+  $('trainingRoundSummary').textContent=round?(statuses[round.status]||String(round.status||'状态待同步'))+' · 本轮已审 '+Number(round.reviewed_images||0)+' 张 · '+(round.promoted?'已启用新模型':'正式模型保留'):'尚无可展示轮次';
+  for(const [name,id]of [['before','Before'],['after','After']]){const metrics=round?.comparison?.[name];$('training'+id+'Found').textContent=typeof metrics?.found==='number'&&typeof metrics?.total_boxes==='number'?metrics.found+' / '+metrics.total_boxes:'—';$('training'+id+'Missed').textContent=typeof metrics?.missed==='number'?String(metrics.missed):'—';$('training'+id+'FalsePositive').textContent=typeof metrics?.false_positive==='number'?String(metrics.false_positive):'未记录';$('training'+id+'ImageRate').textContent=trainingPercent(metrics?.whole_image_pass_rate);}
+  const human=round?.human_pass_rate_after;$('trainingRoundHumanPass').textContent='新模型人工审核通过率：'+(typeof human==='number'&&Number.isFinite(human)?trainingPercent(human):'待积累');
+  const before=round?.comparison?.before,after=round?.comparison?.after,mismatched=typeof before?.total_boxes==='number'&&typeof after?.total_boxes==='number'&&before.total_boxes!==after.total_boxes;
+  $('trainingComparisonCaption').textContent=mismatched?'验证样本不一致 · 暂不比较':'同一固定验证集 · 训练前后对比';$('trainingImageRateLabel').textContent=round?.comparison?.objective==='problem_location_only'?'整图位置通过率':'整图问题完整识别率';
+  $('trainingRoundDefinition').textContent=mismatched?'两侧验证问题总数不同，不能据此判断训练提升。':round?.comparison?.definition||'等待同一固定验证集的训练前后结果；缺失数值不按 0 计算。';$('trainingRoundDefinition').title=$('trainingRoundDefinition').textContent;
+  const minimum=data?.automatic_training?.minimum_confirmed_images;$('trainingRoundAutomatic').textContent=typeof minimum==='number'?'每累计 '+minimum+' 张合规确认样本触发训练；通过验证后才更新模型。':'自动训练按已配置的合规确认样本数量触发。';
+  $('trainingRoundNote').textContent=data?.note||'训练后验证成绩不等于人工审核通过率，新模型审核结果需要继续积累。';$('trainingRoundNote').title=$('trainingRoundNote').textContent;
+}
+async function loadTrainingRounds(){
+  if(S.trainingRoundsLoading)return;S.trainingRoundsLoading=true;S.trainingRoundsError='';if(S.reviewQualityTab==='training')renderTrainingRounds();
+  try{S.trainingRounds=await api('/api/training-rounds/state');}catch(error){S.trainingRoundsError=error.message||String(error);}finally{S.trainingRoundsLoading=false;if(S.reviewQualityTab==='training')renderTrainingRounds();}
 }
 async function loadReviewQuality(){
   if(S.reviewQualityLoading)return;S.reviewQualityLoading=true;S.reviewQualityError='';renderReviewQuality();
@@ -67,7 +94,7 @@ async function loadReviewQuality(){
 }
 function setReviewQuality(open=false){
   $('reviewQualityPanel').hidden=!open;$('reviewQualityToggle').setAttribute('aria-expanded',String(open));
-  if(open){setReviewArchive();setLabelPanel();globalThis.AnnotationUI?.hideEditor?.();S.reviewQualityTab='results';S.reviewQualityModel='';loadReviewQuality();$('reviewQualityClose').focus?.();}
+  if(open){setReviewArchive();setLabelPanel();globalThis.AnnotationUI?.hideEditor?.();S.reviewQualityTab='results';S.reviewQualityModel='';S.reviewQualityBasisPage=0;loadReviewQuality();$('reviewQualityClose').focus?.();}
 }
 function renderReviewArchive(){
   const data=S.reviewBatches||{},worker=reviewWorkerMessage(data.worker),active=data.active_batches||[],archives=data.recent_archives||[];
@@ -579,10 +606,13 @@ on('reviewArchivePrevious','click',()=>{S.reviewArchivePage=Math.max(0,S.reviewA
 on('reviewArchiveNext','click',()=>{S.reviewArchivePage++;renderReviewArchive();});
 on('reviewQualityToggle','click',()=>setReviewQuality($('reviewQualityPanel').hidden));
 on('reviewQualityClose','click',()=>setReviewQuality());on('reviewQualityContinue','click',()=>setReviewQuality());
-on('reviewQualityRefresh','click',loadReviewQuality);
-on('reviewQualityModel','change',()=>{S.reviewQualityModel=$('reviewQualityModel').value;renderReviewQuality();});
+on('reviewQualityRefresh','click',()=>S.reviewQualityTab==='training'?loadTrainingRounds():loadReviewQuality());
+on('reviewQualityModel','change',()=>{S.reviewQualityModel=$('reviewQualityModel').value;S.reviewQualityBasisPage=0;renderReviewQuality();});
 on('reviewQualityResultsTab','click',()=>{S.reviewQualityTab='results';renderReviewQuality();});
 on('reviewQualityBasisTab','click',()=>{S.reviewQualityTab='basis';renderReviewQuality();});
+on('reviewQualityBasisPrevious','click',()=>{S.reviewQualityBasisPage--;renderReviewQuality();});on('reviewQualityBasisNext','click',()=>{S.reviewQualityBasisPage++;renderReviewQuality();});
+on('reviewQualityTrainingTab','click',()=>{S.reviewQualityTab='training';renderReviewQuality();return loadTrainingRounds();});
+on('trainingRoundSelect','change',()=>{S.trainingRoundId=$('trainingRoundSelect').value;renderTrainingRounds();});
 on('backToProblems','click',()=>{S.labelStep=1;renderTags();});
 on('selectReviewPage','click',async()=>{const page=Math.floor(S.index/40);await getPage(page);for(const item of S.pages.get(page)||[])S.selected.add(item.id);renderSelection();renderThumbs();});
 on('confirmReviewSelected','click',async()=>{

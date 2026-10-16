@@ -716,6 +716,8 @@ class Application:
         self.review_batches = ReviewBatches(self.store)
         from review_quality import ReviewQuality
         self.review_quality = ReviewQuality(self.store)
+        from training_rounds import TrainingRounds
+        self.training_rounds = TrainingRounds(self.store)
         self.review_batches.register('legacy-'+dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'),
                                      metadata={'source':'existing_pending'})
         self.scanner = Scanner(self.store)
@@ -928,6 +930,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(self.app.review_state())
             if path == '/api/review-quality/state':
                 return self.send(self.app.review_quality.state())
+            if path == '/api/training-rounds/state':
+                return self.send(self.app.training_rounds.state())
             if path == '/api/review-batches/archive':
                 content=self.app.review_batches.archive_content(params.get('batch',[''])[0])
                 return self.send(content.encode('utf-8'),headers={'Content-Disposition':'attachment; filename="review-archive.json"'})
@@ -995,6 +999,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = self.app.review_batches.register(body['batch_id'],body.get('proposal_ids'),body.get('metadata'))
             elif path == '/api/review-batches/worker':
                 result = self.app.update_review_worker(body)
+            elif path == '/api/training-rounds/record':
+                result = self.app.training_rounds.record(body)
             elif path == '/api/annotation-proposals/reject':
                 result=store.annotations.reject_proposal(int(body['id']),body['proposal_id'],body)
             elif path == '/api/annotation-feedback':

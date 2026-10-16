@@ -47,3 +47,14 @@
 当独立抽样中完全没有错误时，单侧95%二项置信上限要低于 1%／0.5%／0.1%，仍分别至少需要 299／598／2995 次独立观察。同一订单多张相似图片不能当成同样数量的独立证据。正常及无关图片可用于独立评估，不改变问题模型的训练筛选规则。
 
 参考：[Scikit-learn 分组验证](https://scikit-learn.org/stable/modules/cross_validation.html)、[precision/recall 定义](https://scikit-learn.org/stable/auto_examples/model_selection/plot_precision_recall.html)、[概率校准](https://scikit-learn.org/stable/modules/calibration.html)、[NIST 二项比例置信区间](https://itl.nist.gov/div898/handbook/prc/section2/prc241.htm)、[NIST 持续评估](https://airc.nist.gov/airmf-resources/airmf/5-sec-core/)。
+
+# 自动判定与人工纠错闭环
+
+- 待审核框由真实多类别检测器给出位置和问题类型，标准责任在确认界面带出且可改。
+- 模型建议只存在建议表。人工确认才追加分类；草稿、人工框和已有分类保持保护。
+- 对原空类型队列只补充未被人工触碰的建议，保留框/建议ID和坐标，同时更新未审核批次快照。源图、标签和建议指纹变化时跳过，旧页面提交要求重新读取。
+- 原样确认计通过；改类型、移框、删除误报、补出漏框分别统计。只有真实模型类型参与类型正确率，人工继承标签不冒充预测。责任准确率单独待验证。
+- 审核效果的“训练对比”显示同一验证集的训练前后找回、漏检、误报及整图通过率。整图通过要求一对一匹配 IoU≥0.5，所有已标注问题找回且没有多余框；类型训练另要求类型正确。历史未记录的整图率保留为空。
+- 新模型的实际人工通过率需上线后积累，不能用验证成绩代替。自动终判仍关闭。
+- 每20张合规确认图片触发本地静默训练。待审低于10张时补充最多50张，已经审核过的图片不会重新入队，完成批次自动归档。
+- `GET /api/training-rounds/state`读取独立持久化的训练摘要；worker经原有令牌保护的`POST /api/training-rounds/record`幂等发布，不修改人工数据库。

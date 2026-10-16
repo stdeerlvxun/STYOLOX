@@ -5,11 +5,38 @@ import io
 import json
 import math
 import datetime as dt
+import re
 from PIL import Image, ImageOps
 
 
 def fingerprint(value):
     return hashlib.sha256((value or '').encode('utf-8')).hexdigest()
+
+
+def prediction_metadata(box):
+    """Validate genuine model type provenance; inherited labels are not predictions."""
+    provenance=box.get('type_provenance')
+    if provenance is None:
+        if box.get('problem_source')=='model_prediction':raise ValueError('问题类型缺少模型来源')
+        return {}
+    if not isinstance(provenance,dict):raise ValueError('问题类型模型来源不正确')
+    source=provenance.get('source');sha=provenance.get('model_sha256');score=provenance.get('score')
+    if source not in ('detector_class_prediction','image_classifier_prediction'):
+        raise ValueError('问题类型模型来源不正确')
+    if not isinstance(sha,str) or not re.fullmatch('[0-9a-fA-F]{64}',sha):raise ValueError('问题类型模型指纹不正确')
+    if type(score) not in (int,float) or not math.isfinite(score):raise ValueError('问题类型模型分数不正确')
+    if source=='detector_class_prediction' and not 0<=score<=1:raise ValueError('问题类型模型分数不正确')
+    if source=='image_classifier_prediction' and provenance.get('scope')!='whole_image_context':
+        raise ValueError('图级问题类型必须注明辅助范围')
+    clean={'source':source,'model_sha256':sha.lower(),'score':score,
+        'scope':'whole_image_context' if source=='image_classifier_prediction' else 'box'}
+    if 'match_iou' in provenance:
+        overlap=provenance['match_iou']
+        if type(overlap) not in (int,float) or not math.isfinite(overlap) or not 0<=overlap<=1:
+            raise ValueError('问题类型匹配位置不正确')
+        clean['match_iou']=overlap
+    return {'type_provenance':clean,'problem_source':'model_prediction','problem_model_id':sha.lower(),
+        'type_score':score,'type_score_kind':'raw_classifier_score' if source=='image_classifier_prediction' else 'detector_score'}
 
 
 def clean_negative_regions(regions):
@@ -143,9 +170,11 @@ class Annotations:
                 self.store.db.execute("UPDATE annotation_proposals SET status='stale' WHERE image_id=? AND proposal_id=? AND status='pending'",(image_id,row['proposal_id']))
             return None
         return {**data,'proposal_id':row['proposal_id'],'status':row['status'],
-                'source_sha256':data['source']['sha256'],'requires_human_review':True}
+                'source_sha256':data['source']['sha256'],'requires_human_review':True,
+                'content_fingerprint':fingerprint(row['data'])}
 
     def install_proposals(self, manifest, refresh_pending=False):
+        if manifest.get('enrichment_only') is True:return self.enrich_proposals(manifest)
         refresh_pending=manifest.get('refresh_pending',refresh_pending)
         if type(refresh_pending) is not bool:raise ValueError('刷新建议参数不正确')
         if manifest.get('schema_version')!=1 or manifest.get('requires_human_review') is not True:
@@ -185,9 +214,11 @@ class Annotations:
                 clean=[];box_ids=set()
                 for box in boxes:
                     identity=box.get('id');problem=box.get('problem');values=[box.get(k) for k in ('x','y','w','h')]
+                    prediction=prediction_metadata(box)
                     if (box.get('origin')!='model' or not isinstance(identity,str) or not identity or len(identity)>80 or identity in box_ids
                         or not isinstance(problem,str)
-                        or (problem!='' and (problem not in value.get('defects',[]) or problem not in self.store.tags()['defect']))):
+                        or (problem!='' and (problem not in self.store.tags()['defect'] or (not prediction and problem not in value.get('defects',[]))))
+                        or (prediction and not problem)):
                         raise ValueError('框类型或标识不正确')
                     if any(type(v) not in (int,float) or not math.isfinite(v) for v in values):raise ValueError('框坐标不正确')
                     x,y,w,h=values
@@ -195,7 +226,8 @@ class Annotations:
                     score=box.get('score')
                     if score is not None and (type(score) not in (int,float) or not math.isfinite(score)):raise ValueError('分数不正确')
                     clean.append({'id':identity,'problem':problem,'x':x,'y':y,'w':min(w,1-x),'h':min(h,1-y),
-                                  'score':score,'origin':'model'})
+                                  'score':score,'origin':'model',**prediction})
+                    if problem and not prediction:clean[-1]['problem_source']='human_label'
                     box_ids.add(identity)
                 data={'model_id':model_id,'method':method,'source':source,'label_fingerprint':item['label_fingerprint'],
                       'boxes':clean,'note':str(item.get('note','粗定位建议，需人工逐框审核。'))[:1000],
@@ -244,10 +276,105 @@ class Annotations:
                 'human_digest':before,'annotation_digest':annotations_before,
                 'imported_proposal_ids':imported_ids,'imported_image_ids':imported_images}
 
-    def reject_proposal(self, image_id, proposal_id, feedback=None):
-        proposal=self.proposal(image_id,self.source(image_id))
-        if not proposal or proposal['proposal_id']!=proposal_id:raise ValueError('建议已失效或已审核，请重新读取')
+    def enrich_proposals(self,manifest):
+        """Only fill untouched blank machine types; keep position IDs and human data immutable."""
+        if manifest.get('schema_version')!=1 or manifest.get('requires_human_review') is not True:
+            raise ValueError('自动框必须标记为待人工审核')
+        items=manifest.get('items')
+        if not isinstance(items,list) or len(items)>10000:raise ValueError('自动框清单格式不正确')
+        ids=[item.get('image_id') for item in items if isinstance(item,dict)]
+        if len(ids)!=len(items) or any(type(v) is not int for v in ids) or len(set(ids))!=len(ids):
+            raise ValueError('自动框图片标识重复或格式不正确')
+        prepared=[];skipped=0
+        for item in items:
+            try:
+                image_id=item['image_id'];image=self.store.image(image_id)
+                if image['relative_path']!=item['relative_path']:raise ValueError('原图路径不一致')
+                old=self.store.one("SELECT * FROM annotation_proposals WHERE image_id=? AND proposal_id=? AND status='pending'",
+                    (image_id,item['proposal_id']))
+                if not old:raise ValueError('建议已审核或变化')
+                if item.get('expected_proposal_fingerprint')!=fingerprint(old['data']):raise ValueError('建议版本已变化')
+                old_data=json.loads(old['data']);source=self.source(image_id)
+                if any(source.get(k)!=item['source'].get(k) or source.get(k)!=old_data['source'].get(k)
+                       for k in ('sha256','width','height','size','mtime_ns')):raise ValueError('自动框原图不一致')
+                if item['label_fingerprint']!=fingerprint(old['label_data']):raise ValueError('人工分类已变化')
+                if not self.proposal(image_id,source) or self._has_human_review(image_id):raise ValueError('已有人工编辑')
+                if self.store.one('SELECT image_id FROM annotation_documents WHERE image_id=?',(image_id,)):
+                    raise ValueError('已有人工编辑')
+                if self.store.one('SELECT image_id FROM annotation_feedback WHERE image_id=? LIMIT 1',(image_id,)):
+                    raise ValueError('已有人工纠错')
+                boxes=item.get('boxes')
+                if not isinstance(boxes,list) or len(boxes)!=len(old_data['boxes']):raise ValueError('补充类型不能改变框')
+                incoming={box['id']:box for box in boxes}
+                if len(incoming)!=len(boxes) or set(incoming)!={box['id'] for box in old_data['boxes']}:
+                    raise ValueError('补充类型不能改变框')
+                enriched=[];changes=[]
+                for before in old_data['boxes']:
+                    box=incoming[before['id']]
+                    if any(box.get(k)!=before[k] for k in ('x','y','w','h')):raise ValueError('补充类型不能改变框')
+                    if before['problem']:
+                        if box.get('problem')!=before['problem']:raise ValueError('已有问题类型不能替换')
+                        enriched.append(dict(before));continue
+                    if not box.get('problem'):enriched.append(dict(before));continue
+                    if box['problem'] not in self.store.tags()['defect']:raise ValueError('请选择已有问题点')
+                    prediction=prediction_metadata(box)
+                    if not prediction:raise ValueError('补充问题类型必须有模型预测来源')
+                    enriched.append({**before,'problem':box['problem'],**prediction})
+                    changes.append({'box_id':before['id'],'before_problem':'','after_problem':box['problem'],
+                        'type_provenance':prediction['type_provenance']})
+                if not changes:raise ValueError('没有新的问题类型建议')
+                data={**old_data,'boxes':enriched,'type_enrichment':{
+                    'at':dt.datetime.now(dt.timezone.utc).isoformat(),'previous_content_fingerprint':fingerprint(old['data']),
+                    'changes':changes,'requires_fresh_review':True}}
+                prepared.append((image_id,old,data))
+            except (ValueError,KeyError,TypeError,OSError):skipped+=1
+        enriched_ids=[];enriched_images=[]
         with self.store.lock,self.store.db:
+            self.store.db.execute('BEGIN IMMEDIATE')
+            from deployment.snapshot import digest,annotation_digest
+            before_digest=digest(self.store.db);annotations_before=annotation_digest(self.store.db)
+            has_batches=self.store.one("SELECT 1 FROM sqlite_master WHERE type='table' AND name='review_batch_items'")
+            for image_id,old,data in prepared:
+                current=self.store.one('SELECT * FROM annotation_proposals WHERE image_id=?',(image_id,))
+                label=self.store.one('SELECT data FROM labels WHERE image_id=?',(image_id,))
+                image=self.store.image(image_id)
+                if (not current or current['proposal_id']!=old['proposal_id'] or current['status']!='pending'
+                    or current['reviewed_at'] is not None or current['data']!=old['data']
+                    or current['label_data']!=old['label_data'] or (label['data'] if label else '')!=old['label_data']
+                    or not image['available'] or any(image[k]!=data['source'][k] for k in ('size','mtime_ns'))
+                    or self.store.one('SELECT image_id FROM drafts WHERE image_id=?',(image_id,))
+                    or self.store.one('SELECT image_id FROM annotation_documents WHERE image_id=?',(image_id,))
+                    or self.store.one('SELECT image_id FROM annotation_feedback WHERE image_id=? LIMIT 1',(image_id,))
+                    or self._has_human_review(image_id)):
+                    skipped+=1;continue
+                batch=None
+                if has_batches:
+                    batch=self.store.one('SELECT b.*,r.completed_at FROM review_batch_items b JOIN review_batches r ON r.batch_id=b.batch_id WHERE b.proposal_id=?',(old['proposal_id'],))
+                    if batch and (batch['decision'] is not None or batch['reviewed_at'] is not None or batch['result_data'] is not None or batch['completed_at'] is not None
+                        or batch['proposal_data']!=old['data']):skipped+=1;continue
+                raw=json.dumps(data,ensure_ascii=False,separators=(',',':'))
+                self.store.db.execute("UPDATE annotation_proposals SET data=? WHERE image_id=? AND proposal_id=? AND status='pending' AND data=?",
+                    (raw,image_id,old['proposal_id'],old['data']))
+                if batch:self.store.db.execute('UPDATE review_batch_items SET proposal_data=? WHERE proposal_id=? AND proposal_data=? AND decision IS NULL',
+                    (raw,old['proposal_id'],old['data']))
+                enriched_ids.append(old['proposal_id']);enriched_images.append(image_id)
+            assert before_digest==digest(self.store.db),'Human classifications changed'
+            assert annotations_before==annotation_digest(self.store.db),'Human position annotations changed'
+        return {'imported':0,'refreshed':0,'withdrawn':0,'enriched':len(enriched_ids),'skipped':skipped,
+            'enriched_proposal_ids':enriched_ids,'enriched_image_ids':enriched_images,
+            'imported_proposal_ids':[],'imported_image_ids':[],
+            'human_classifications_unchanged':True,'human_annotations_unchanged':True,
+            'human_digest':before_digest,'annotation_digest':annotations_before}
+
+    def reject_proposal(self, image_id, proposal_id, feedback=None):
+        source=self.source(image_id)
+        with self.store.lock,self.store.db:
+            if not self.store.db.in_transaction:self.store.db.execute('BEGIN IMMEDIATE')
+            proposal=self.proposal(image_id,source)
+            if not proposal or proposal['proposal_id']!=proposal_id:raise ValueError('建议已失效或已审核，请重新读取')
+            expected=(feedback or {}).get('expected_proposal_fingerprint')
+            if (expected is not None or proposal.get('type_enrichment')) and expected!=proposal['content_fingerprint']:
+                raise ValueError('自动框已补充或更新问题类型，请重新读取后审核；原结果未覆盖')
             if feedback and feedback.get('negative_regions'):
                 self.save_feedback(image_id,{**feedback,'proposal_id':proposal_id,'status':'confirmed'})
             self.store.db.execute("UPDATE annotation_proposals SET status='rejected',reviewed_at=? WHERE image_id=? AND proposal_id=? AND status='pending'",
@@ -435,14 +562,20 @@ class Annotations:
                     accepted=self.store.one("SELECT data FROM annotation_proposals WHERE image_id=? AND proposal_id=? AND status='accepted'",(image_id,proposal_id))
                     if accepted:
                         data=json.loads(accepted['data'])
-                        if data['source']['sha256']==source['sha256']:proposal={**data,'proposal_id':proposal_id}
+                        if data['source']['sha256']==source['sha256']:proposal={**data,'proposal_id':proposal_id,'content_fingerprint':fingerprint(accepted['data'])}
                 if not proposal or proposal['proposal_id']!=proposal_id:raise ValueError('自动框建议已变化或已审核，请重新读取')
+                expected_proposal=body.get('expected_proposal_fingerprint')
+                if (expected_proposal is not None or (proposal.get('type_enrichment') and proposal.get('status')=='pending')):
+                    if expected_proposal!=proposal['content_fingerprint']:
+                        raise ValueError('自动框已补充或更新问题类型，请重新读取后审核；原结果未覆盖')
                 original_boxes={box['id']:box for box in proposal['boxes']}
                 for box in clean:
+                    original=original_boxes.get(box.get('source_box_id',box['id']))
                     if box['problem']=='' and box.get('origin')=='model':
-                        original=original_boxes.get(box.get('source_box_id',box['id']))
                         if not original or original['problem']!='':raise ValueError('待选问题框来源不正确')
-                if (status=='confirmed' and clean and any(box['problem']=='' for box in proposal['boxes'])
+                    if original and original.get('type_provenance'):
+                        box.update(prediction_metadata(original),predicted_problem=original['problem'])
+                if (status=='confirmed' and clean and any(box['problem']=='' or box.get('type_provenance') for box in proposal['boxes'])
                     and 'classification_updates' not in body):
                     raise ValueError('请为待选问题框选择问题点和责任后确认')
                 if previous and previous.get('proposal_id')!=proposal_id:
@@ -473,6 +606,7 @@ class Annotations:
             if updates is not None:document['classification_updates']=updates
             if proposal_id:
                 document.update(proposal_id=proposal_id,model_id=proposal['model_id'],method=proposal['method'],
+                    proposal_content_fingerprint=proposal['content_fingerprint'],
                     origin='machine_assisted_human_confirmed' if status=='confirmed' else 'machine_assisted_draft')
             raw=json.dumps(document,ensure_ascii=False,separators=(',',':'))
             stamp=dt.datetime.now(dt.timezone.utc).isoformat();next_version=version+1

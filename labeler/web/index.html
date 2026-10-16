@@ -126,18 +126,23 @@
   </section>
   <section id="reviewQualityPanel" class="review-archive-panel review-quality-panel" role="dialog" aria-labelledby="reviewQualityTitle" hidden>
     <div class="review-archive-heading"><h2 id="reviewQualityTitle">人工审核通过率</h2><button id="reviewQualityClose" class="text-button">收起</button></div>
-    <div class="review-quality-model"><label for="reviewQualityModel" class="sr-only">模型分组</label><select id="reviewQualityModel"></select><button id="reviewQualityRefresh">刷新</button></div>
+    <div class="review-quality-model"><label for="reviewQualityModel" class="sr-only">模型分组</label><select id="reviewQualityModel"></select><label for="trainingRoundSelect" class="sr-only">训练轮次</label><select id="trainingRoundSelect" hidden></select><button id="reviewQualityRefresh">刷新</button></div>
     <p id="reviewQualityStatus" class="small" role="status"></p>
-    <div class="review-quality-tabs" role="group" aria-label="审核效果内容"><button id="reviewQualityResultsTab" aria-pressed="true">审核结果</button><button id="reviewQualityBasisTab" aria-pressed="false">自动化依据</button></div>
+    <div class="review-quality-tabs" role="group" aria-label="审核效果内容"><button id="reviewQualityResultsTab" aria-pressed="true">审核结果</button><button id="reviewQualityBasisTab" aria-pressed="false">自动化依据</button><button id="reviewQualityTrainingTab" aria-pressed="false">训练对比</button></div>
     <div id="reviewQualityResults">
       <p id="reviewQualityCoverage" class="small"></p>
-      <dl class="review-quality-metrics"><div><dt>整图位置原样通过</dt><dd id="reviewQualityImageRate">—</dd></div><div><dt>机器框位置未改</dt><dd id="reviewQualityBoxRate">—</dd></div></dl>
+      <dl class="review-quality-metrics"><div><dt>完整预测原样通过</dt><dd id="reviewQualityFullRate">—</dd></div><div><dt>整图位置原样通过</dt><dd id="reviewQualityImageRate">—</dd></div><div><dt>问题类型审核通过</dt><dd id="reviewQualityTypeRate">—</dd></div><div><dt>机器框位置未改</dt><dd id="reviewQualityBoxRate">—</dd></div></dl>
       <p id="reviewQualityChanges" class="small"></p><p id="reviewQualityTypes" class="small muted"></p>
-      <p class="small muted review-quality-note">仅统计显式提交的审核；原样提交算通过，只看过不计。位置通过不代表类型或责任准确，人工给未知框选类型不算位置错误。</p>
+      <p class="small muted review-quality-note">原样提交算通过，只看过不计。完整通过要求每框都有模型类型且位置、类型均未改；人工给未知框选类型不算位置错误，也不算模型类型预测正确。责任另行验证。</p>
     </div>
     <div id="reviewQualityBasis" hidden>
-      <p id="reviewQualityConfidence" class="small"></p><p class="small muted">建议开放条件：整图原样通过 ≥98%，按售后单计算的单侧 95% 下界 ≥95%，至少 300 张、100 单；另需独立盲测和类型、责任验证。</p>
-      <ul id="reviewQualityShortfalls" class="review-quality-shortfalls"></ul><p id="reviewQualityScope" class="small muted"></p>
+      <p id="reviewQualityConfidence" class="small"></p><p class="small muted">建议开放条件：完整预测原样通过与类型审核均 ≥98%，完整预测覆盖至少 300 张、100 单，按单的 95% 下界 ≥95%；另需独立盲测和责任验证。</p>
+      <ul id="reviewQualityShortfalls" class="review-quality-shortfalls"></ul><div id="reviewQualityBasisPager" class="review-archive-pages"><button id="reviewQualityBasisPrevious" aria-label="上一页自动化差距">上一页</button><span id="reviewQualityBasisPage">1 / 1</span><button id="reviewQualityBasisNext" aria-label="下一页自动化差距">下一页</button></div><p id="reviewQualityScope" class="small muted"></p>
+    </div>
+    <div id="reviewQualityTraining" hidden>
+      <p id="trainingRoundSummary" class="small"></p>
+      <table class="review-training-table"><caption id="trainingComparisonCaption">同一固定验证集 · 训练前后对比</caption><thead><tr><th scope="col">指标</th><th scope="col">训练前</th><th scope="col">训练后</th></tr></thead><tbody><tr><th scope="row">问题找回 / 总数</th><td id="trainingBeforeFound">—</td><td id="trainingAfterFound">—</td></tr><tr><th scope="row">仍漏问题</th><td id="trainingBeforeMissed">—</td><td id="trainingAfterMissed">—</td></tr><tr><th scope="row">误报框数</th><td id="trainingBeforeFalsePositive">—</td><td id="trainingAfterFalsePositive">—</td></tr><tr><th id="trainingImageRateLabel" scope="row">整图完整识别率</th><td id="trainingBeforeImageRate">—</td><td id="trainingAfterImageRate">—</td></tr></tbody></table>
+      <p id="trainingRoundHumanPass" class="small"></p><p id="trainingRoundDefinition" class="small muted"></p><p id="trainingRoundAutomatic" class="small muted"></p><p id="trainingRoundNote" class="small muted"></p>
     </div>
     <div class="review-quality-footer"><span class="small muted">自动终判尚未开放</span><button id="reviewQualityContinue">继续人工审核</button></div>
   </section>

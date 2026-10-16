@@ -23,7 +23,7 @@
   if(typeof document==='undefined'){if(typeof module!=='undefined')module.exports=geometry;return;}
   const A={id:null,active:false,loading:false,source:null,version:0,boxes:[],outcome:'boxed',labelFingerprint:'',
     review:null,dirty:false,revision:0,tail:Promise.resolve(),timer:null,undo:[],selected:'',draw:false,drag:null,
-    error:'',saveError:'',readOnly:false,loadTicket:0,saving:0,proposal:null,proposalId:null,rejecting:false,
+    error:'',saveError:'',readOnly:false,loadTicket:0,saving:0,proposal:null,proposalId:null,proposalFingerprint:null,rejecting:false,
     negativeRegions:[],documentStatus:null,feedback:null,popup:null,lastProblem:'',quickFlow:false};
   const kinds={problem_miss:'漏判',extra_candidate:'额外候选',normal_overcall:'正常图报问题',false_unrelated:'相关图误判无关',missed_unrelated:'无关图未识别'};
   const el=id=>document.getElementById(id);
@@ -145,8 +145,9 @@
   function adoptSuggestions(){
     const suggestions=suggestionBoxes();if(!suggestions.length)return;
     A.proposalId=A.proposal.proposal_id;
+    A.proposalFingerprint=A.proposal.content_fingerprint||null;
     for(const box of suggestions){const id=A.boxes.some(b=>b.id===box.source_box_id)?clientId():box.source_box_id;
-      const {suggestion,...clean}=box;A.boxes.push({...clean,id,origin:'model',proposal_id:A.proposalId});
+      const {suggestion,...clean}=box;A.boxes.push({...clean,id,origin:'model',proposal_id:A.proposalId,...(box.problem&&!Object.hasOwn(box,'responsibilities')?responsibilityFields(box.problem):{})});
       if(A.selected===box.id)A.selected=id;}
     A.outcome='boxed';
   }
@@ -232,11 +233,11 @@
   async function save(status='draft'){
     clearTimeout(A.timer);if(!A.id||(!A.dirty&&status==='draft'))return A.tail;
     if(!ready(true))throw new Error(A.error||'补标尚未读取，或原图已变化，请重新读取');
-    const id=A.id,revision=A.revision,boxes=structuredClone(A.boxes),negativeRegions=structuredClone(A.negativeRegions),outcome=A.outcome,source=A.source.sha256,fp=A.labelFingerprint,proposalId=A.proposalId,updates=updatesForBoxes(boxes);
+    const id=A.id,revision=A.revision,boxes=structuredClone(A.boxes),negativeRegions=structuredClone(A.negativeRegions),outcome=A.outcome,source=A.source.sha256,fp=A.labelFingerprint,proposalId=A.proposalId,proposalFingerprint=A.proposalFingerprint,updates=updatesForBoxes(boxes);
     const task=A.tail.catch(()=>{}).then(async()=>{
       A.saving++;render();
       try{const result=await api('/api/annotations',{id,expected_version:A.version,source_sha256:source,
-          label_fingerprint:fp,boxes,negative_regions:negativeRegions,outcome,status,review_run:A.review?.run_id||null,...(proposalId?{proposal_id:proposalId}:{}),...(updates?{classification_updates:updates,...(status==='confirmed'?{expected_classification_draft:S.current?.draft_fingerprint||null}:{})}:{})});
+          label_fingerprint:fp,boxes,negative_regions:negativeRegions,outcome,status,review_run:A.review?.run_id||null,...(proposalId?{proposal_id:proposalId,...(proposalFingerprint?{expected_proposal_fingerprint:proposalFingerprint}:{})}:{}),...(updates?{classification_updates:updates,...(status==='confirmed'?{expected_classification_draft:S.current?.draft_fingerprint||null}:{})}:{})});
         if(A.id===id){A.version=result.version;A.documentStatus=status;A.saveError='';if(result.label_fingerprint)A.labelFingerprint=result.label_fingerprint;if(result.label&&S.current?.id===id){S.current.label=result.label;if(status==='confirmed'&&updates){S.current.has_draft=false;S.current.draft_fingerprint=null;}}if(A.revision===revision)A.dirty=false;render();}
         return result;
       }finally{A.saving--;render();}
@@ -244,7 +245,7 @@
     try{return await task;}catch(error){if(A.id===id){A.saveError=error.message;A.dirty=true;render();}throw error;}
   }
   async function loadForImage(item){
-    const ticket=++A.loadTicket;closePopup();A.id=item.id;A.source=null;A.boxes=[];A.negativeRegions=[];A.documentStatus=null;A.review=null;A.undo=[];A.selected='';A.draw=false;A.drag=null;A.dirty=false;A.error='';A.saveError='';A.readOnly=false;A.version=0;A.tail=Promise.resolve();A.revision=0;A.proposal=null;A.proposalId=null;A.rejecting=false;
+    const ticket=++A.loadTicket;closePopup();A.id=item.id;A.source=null;A.boxes=[];A.negativeRegions=[];A.documentStatus=null;A.review=null;A.undo=[];A.selected='';A.draw=false;A.drag=null;A.dirty=false;A.error='';A.saveError='';A.readOnly=false;A.version=0;A.tail=Promise.resolve();A.revision=0;A.proposal=null;A.proposalId=null;A.proposalFingerprint=null;A.rejecting=false;
     const mode=el('statusFilter').value;
     if(mode.startsWith('error_review')||mode==='annotation_pending'||mode==='annotated'||mode==='auto_boxes'){A.active=true;A.quickFlow=false;}
     // Only the current image is prefetched, so its first right-button drag is ready without opening annotation controls.
@@ -254,6 +255,7 @@
       A.negativeRegions=result.document.negative_regions||[];A.documentStatus=result.document.status||null;
       A.labelFingerprint=result.label_fingerprint;A.review=result.review;A.readOnly=result.source_changed;A.tail=Promise.resolve();
       A.proposal=result.proposal||null;A.proposalId=result.document.proposal_id||A.boxes.find(box=>box.proposal_id)?.proposal_id||null;
+      A.proposalFingerprint=result.proposal?.content_fingerprint||result.document.proposal_content_fingerprint||null;
     }catch(error){if(ticket===A.loadTicket)A.error='补标读取失败：'+error.message;}
     finally{if(ticket===A.loadTicket){A.loading=false;render();refreshFeedback();}}
   }
@@ -265,6 +267,7 @@
     const unassigned=(A.outcome==='boxed'?displayBoxes():A.boxes).find(box=>!box.problem);
     if(unassigned){A.active=true;A.quickFlow=true;A.draw=false;A.selected=unassigned.id;openPopup(unassigned,stage.getBoundingClientRect().left+20,stage.getBoundingClientRect().top+20);A.popup.error='请先为当前框选择问题点，机器尚未判断问题类型';render();throw new Error(A.popup.error);}
     if(A.outcome==='boxed'&&suggestionBoxes().length)change(()=>{},true);
+    if(A.outcome==='boxed'&&A.boxes.some(box=>box.origin==='model'&&box.problem&&!Object.hasOwn(box,'responsibilities')))change(()=>{for(const box of A.boxes)if(box.origin==='model'&&box.problem&&!Object.hasOwn(box,'responsibilities'))Object.assign(box,responsibilityFields(box.problem));});
     if(A.outcome==='boxed'&&!A.boxes.length&&A.negativeRegions.length)A.outcome='needs_correction';
     if(A.outcome==='boxed'&&!A.boxes.length)throw new Error('尚未框选问题位置；只复核分类请使用底部“图片状态 / 分类”，或先选择其他复核结果。');
     const incomplete=A.boxes.find(box=>Object.hasOwn(box,'responsibilities')&&!box.responsibilities.length);
@@ -379,5 +382,5 @@
   },true);
   window.addEventListener('beforeunload',event=>{if(A.dirty){event.preventDefault();event.returnValue='';}});
   global.AnnotationUI={submitImage:confirm,continueBox,hasWork:()=>A.id===S.current?.id&&(A.boxes.length>0||A.negativeRegions.length>0||suggestionBoxes().length>0||!!A.popup||!!A.drag),isReady:()=>ready(),isLoading:()=>!!S.current&&(A.id!==S.current.id||A.loading||!!A.error||A.readOnly||!A.source),hideEditor:closePopup,saveDraft:()=>save(),loadForImage,renderOverlay,refresh:()=>{if(A.active)render();},
-    empty(){closePopup();A.id=null;A.source=null;A.boxes=[];A.negativeRegions=[];A.documentStatus=null;A.review=null;A.proposal=null;A.proposalId=null;A.loading=false;render();}};
+    empty(){closePopup();A.id=null;A.source=null;A.boxes=[];A.negativeRegions=[];A.documentStatus=null;A.review=null;A.proposal=null;A.proposalId=null;A.proposalFingerprint=null;A.loading=false;render();}};
 })(globalThis);

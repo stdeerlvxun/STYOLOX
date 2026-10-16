@@ -8,6 +8,7 @@ import unittest
 from PIL import Image
 
 from app import Store
+from annotations import fingerprint
 
 
 class BoxProposalTest(unittest.TestCase):
@@ -351,6 +352,120 @@ class BoxProposalTest(unittest.TestCase):
         with self.store.db:
             self.store.db.execute("INSERT INTO error_reviews(image_id,run_id,data,status,reviewed_at) VALUES(?,?,?,'reviewed','now')",(self.id,'human-reviewed','{}'))
         self.assert_no_pending()
+
+    @staticmethod
+    def type_prediction():
+        return {'source':'detector_class_prediction','model_sha256':'a'*64,'score':.81,'match_iou':.72}
+
+    def enrichment(self,proposal):
+        detail=self.store.annotations.detail(self.id)
+        row=self.store.one('SELECT * FROM annotation_proposals WHERE image_id=?',(self.id,))
+        boxes=copy.deepcopy(proposal['boxes'])
+        for box in boxes:
+            if not box['problem']:box.update(problem='崩边',type_provenance=self.type_prediction())
+        return {'schema_version':1,'requires_human_review':True,'enrichment_only':True,'items':[{
+            'image_id':self.id,'relative_path':self.store.image(self.id)['relative_path'],
+            'proposal_id':proposal['proposal_id'],'expected_proposal_fingerprint':fingerprint(row['data']),
+            'source':detail['source'],'label_fingerprint':detail['label_fingerprint'],'boxes':boxes}]}
+
+    def test_actual_predicted_type_on_unclassified_image_is_not_written_before_confirmation(self):
+        self.id=self.add_image('typed-unclassified.jpg');manifest=self.manifest()
+        manifest['items'][0]['boxes'][0].update(problem='崩边',type_provenance=self.type_prediction())
+        before=self.human(),self.annotations()
+        self.assertEqual(self.store.annotations.install_proposals(manifest)['imported'],1)
+        self.assertEqual((self.human(),self.annotations()),before)
+        proposal=self.store.annotations.detail(self.id)['proposal']
+        self.assertEqual(proposal['boxes'][0]['problem_source'],'model_prediction')
+        body=self.payload(proposal)
+        with self.assertRaisesRegex(ValueError,'问题点和责任'):self.store.annotations.save(self.id,body)
+        body['classification_updates']={'defects':['崩边'],'problem_responsibilities':{'崩边':['生产']}}
+        saved=self.store.annotations.save(self.id,body)
+        self.assertEqual(saved['label']['defects'],['崩边'])
+        self.assertEqual(saved['document']['boxes'][0]['type_provenance'],proposal['boxes'][0]['type_provenance'])
+        self.assertEqual(saved['document']['boxes'][0]['predicted_problem'],'崩边')
+
+    def test_image_classifier_raw_score_is_preserved_with_explicit_whole_image_scope(self):
+        self.id=self.add_image('classifier-unclassified.jpg');manifest=self.manifest()
+        manifest['items'][0]['boxes'][0].update(problem='崩边',type_provenance={
+            'source':'image_classifier_prediction','model_sha256':'b'*64,'score':-1.4,'scope':'whole_image_context'})
+        self.assertEqual(self.store.annotations.install_proposals(manifest)['imported'],1)
+        box=self.store.annotations.detail(self.id)['proposal']['boxes'][0]
+        self.assertEqual((box['type_score'],box['type_score_kind']),(-1.4,'raw_classifier_score'))
+
+    def test_pending_type_enrichment_preserves_ids_batch_and_all_human_data(self):
+        from review_batches import ReviewBatches
+        proposal,_=self.install_unknown();batches=ReviewBatches(self.store)
+        batches.register('type-enrichment',[proposal['proposal_id']])
+        manifest=self.enrichment(proposal);before=self.human(),self.annotations()
+        result=self.store.annotations.install_proposals(manifest)
+        self.assertEqual((result['imported'],result['enriched'],result['skipped']),(0,1,0))
+        current=self.store.annotations.detail(self.id)['proposal']
+        self.assertEqual(current['proposal_id'],proposal['proposal_id'])
+        self.assertEqual(current['boxes'][0]['id'],proposal['boxes'][0]['id'])
+        self.assertEqual(current['boxes'][0]['problem'],'崩边')
+        self.assertNotEqual(current['content_fingerprint'],proposal['content_fingerprint'])
+        self.assertEqual((self.human(),self.annotations()),before)
+        row=self.store.one('SELECT * FROM annotation_proposals WHERE image_id=?',(self.id,))
+        batch=self.store.one('SELECT * FROM review_batch_items WHERE proposal_id=?',(proposal['proposal_id'],))
+        self.assertEqual(batch['proposal_data'],row['data']);self.assertEqual(batch['batch_id'],'type-enrichment')
+        repeated=self.store.annotations.install_proposals(manifest)
+        self.assertEqual((repeated['enriched'],repeated['skipped']),(0,1))
+        body=self.payload(current);body.update(expected_proposal_fingerprint=current['content_fingerprint'],
+            classification_updates={'defects':['崩边'],'problem_responsibilities':{'崩边':['生产']}})
+        self.store.annotations.save(self.id,body);batches.sync()
+        self.assertEqual(batches.state()['archives_count'],1)
+        archive=json.loads(batches.archive_content('type-enrichment'))
+        self.assertEqual(archive['comparison']['problem_type_changed'],0)
+
+    def test_type_enrichment_invalidates_old_open_page_and_requires_fresh_baseline(self):
+        proposal,_=self.install_unknown();old_body=self.payload(proposal)
+        old_body['boxes'][0]['problem']='缺角'
+        old_body['classification_updates']={'defects':['缺角'],'problem_responsibilities':{'缺角':['生产']}}
+        self.store.annotations.install_proposals(self.enrichment(proposal))
+        before=self.human(),self.annotations()
+        for expected in (None,proposal['content_fingerprint']):
+            old_body['expected_proposal_fingerprint']=expected
+            with self.assertRaisesRegex(ValueError,'重新读取'):self.store.annotations.save(self.id,old_body)
+        self.assertEqual((self.human(),self.annotations()),before)
+
+    def test_enriched_direct_rejection_requires_current_proposal_fingerprint(self):
+        proposal,_=self.install_unknown()
+        self.store.annotations.install_proposals(self.enrichment(proposal))
+        before=self.human(),self.annotations()
+        for feedback in (None,{'expected_proposal_fingerprint':proposal['content_fingerprint']}):
+            with self.assertRaisesRegex(ValueError,'重新读取'):
+                self.store.annotations.reject_proposal(self.id,proposal['proposal_id'],feedback)
+        self.assertEqual((self.human(),self.annotations()),before)
+        self.assertEqual(self.store.annotations.proposal_state()['pending'],1)
+        current=self.store.annotations.detail(self.id)['proposal']
+        result=self.store.annotations.reject_proposal(self.id,current['proposal_id'],{
+            'expected_proposal_fingerprint':current['content_fingerprint']})
+        self.assertTrue(result['rejected'])
+        self.assertEqual(self.store.annotations.proposal_state()['rejected'],1)
+        self.assertEqual((self.human(),self.annotations()),before)
+
+    def test_type_enrichment_rechecks_concurrent_human_work_and_batch_snapshot(self):
+        from review_batches import ReviewBatches
+        proposal,_=self.install_unknown();batches=ReviewBatches(self.store);batches.register('protected',[proposal['proposal_id']])
+        manifest=self.enrichment(proposal)
+        with self.store.db:self.store.db.execute("UPDATE review_batch_items SET proposal_data='{}' WHERE proposal_id=?",(proposal['proposal_id'],))
+        result=self.store.annotations.install_proposals(manifest)
+        self.assertEqual((result['enriched'],result['skipped']),(0,1))
+        with self.store.db:self.store.db.execute('UPDATE review_batch_items SET proposal_data=(SELECT data FROM annotation_proposals WHERE image_id=?)',(self.id,))
+        source=self.store.annotations.source
+        def edit_after_source(image_id):
+            result=source(image_id);self.store.save_draft(image_id,{'defects':['缺角'],'image_state':'defect'});return result
+        self.store.annotations.source=edit_after_source
+        result=self.store.annotations.install_proposals(manifest)
+        self.assertEqual((result['enriched'],result['skipped']),(0,1))
+        self.assertEqual(json.loads(self.store.one('SELECT data FROM annotation_proposals WHERE image_id=?',(self.id,))['data'])['boxes'][0]['problem'],'')
+
+    def test_type_enrichment_never_changes_locations_or_existing_known_types(self):
+        proposal,_=self.install_unknown();manifest=self.enrichment(proposal)
+        manifest['items'][0]['boxes'][0]['x']+=.1
+        self.assertEqual(self.store.annotations.install_proposals(manifest)['enriched'],0)
+        manifest=self.enrichment(proposal);manifest['items'][0]['boxes'][0]['type_provenance']['score']=2
+        self.assertEqual(self.store.annotations.install_proposals(manifest)['enriched'],0)
 
     def test_proposals_are_scoped_to_current_root(self):
         manifest = self.manifest()

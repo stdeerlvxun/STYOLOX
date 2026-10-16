@@ -23,8 +23,15 @@ def _time(value):
 def _hash(raw):return hashlib.sha256((raw or '').encode('utf-8')).hexdigest()
 
 
+def _predicted(box):
+    provenance=box.get('type_provenance') or {}
+    return (bool(box.get('problem')) and provenance.get('source') in ('detector_class_prediction','image_classifier_prediction')
+        and isinstance(provenance.get('model_sha256'),str) and len(provenance['model_sha256'])==64)
+
+
 def _positions(original,final,rejected=False):
     old={box['id']:box for box in original};retained=set();unchanged=moved=added=assigned=changed=0
+    predicted={box['id'] for box in original if _predicted(box)};type_correct=type_changed=0
     for box in final:
         identity=box.get('source_box_id',box['id']);before=old.get(identity)
         if before is None or identity in retained:added+=1;continue
@@ -33,12 +40,21 @@ def _positions(original,final,rejected=False):
         moved+=shifted;unchanged+=not shifted
         assigned+=not before.get('problem') and bool(box.get('problem'))
         changed+=bool(before.get('problem')) and box.get('problem')!=before.get('problem')
+        if identity in predicted:
+            type_correct+=box.get('problem')==before.get('problem')
+            type_changed+=box.get('problem')!=before.get('problem')
     removed=len(old)-len(retained)
-    return {'whole_image_unchanged':int(bool(original) and not rejected and not (removed or moved or added)),
+    position_unchanged=int(bool(original) and not rejected and not (removed or moved or added))
+    fully_predicted=int(bool(original) and len(predicted)==len(original))
+    no_change=int(position_unchanged and not (changed or assigned))
+    return {'whole_image_unchanged':position_unchanged,'whole_image_no_change':no_change,
+        'fully_predicted_images':fully_predicted,'fully_predicted_unchanged_images':fully_predicted*no_change,
+        'predicted_type_reviewed_boxes':len(predicted),'predicted_type_correct_boxes':type_correct,
+        'predicted_type_changed_boxes':type_changed,'predicted_type_rejected_boxes':len(predicted-retained),
         'reviewed_machine_boxes':len(original),'unchanged_position_boxes':unchanged,
         'deleted_machine_boxes':removed,'moved_machine_boxes':moved,'human_added_boxes':added,
         'problem_type_assigned':assigned,'problem_type_changed':changed,
-        'inherited_problem_labels':sum(bool(box.get('problem')) for box in original)}
+        'inherited_problem_labels':sum(bool(box.get('problem')) and not _predicted(box) for box in original)}
 
 
 class ReviewQuality:
@@ -97,7 +113,8 @@ class ReviewQuality:
         return {'final':[],'rejected':True,'terminal':False,'reviewed_at':row['reviewed_at']},None
 
     @staticmethod
-    def _finish(group,cases):
+    def _finish(group,cases,typed_cases=None):
+        typed_cases=typed_cases or {}
         count=group['reviewed_images'];boxes=group['reviewed_machine_boxes']
         group['whole_image_unchanged_rate']=group['whole_image_unchanged']/count if count else None
         group['whole_image_rate_lower95']=wilson_lower(group['whole_image_unchanged'],count)
@@ -106,6 +123,13 @@ class ReviewQuality:
         group['unchanged_cases']=sum(all(results) for results in cases.values())
         group['case_unchanged_rate']=group['unchanged_cases']/len(cases) if cases else None
         group['case_rate_lower95']=wilson_lower(group['unchanged_cases'],len(cases))
+        typed=group.get('predicted_type_reviewed_boxes',0);complete=group.get('fully_predicted_images',0)
+        group['whole_image_no_change_rate']=group.get('whole_image_no_change',0)/count if count else None
+        group['predicted_type_correct_rate']=group.get('predicted_type_correct_boxes',0)/typed if typed else None
+        group['fully_predicted_unchanged_rate']=group.get('fully_predicted_unchanged_images',0)/complete if complete else None
+        group['fully_predicted_cases']=len(typed_cases)
+        group['fully_predicted_unchanged_cases']=sum(all(results) for results in typed_cases.values())
+        group['fully_predicted_case_lower95']=wilson_lower(group['fully_predicted_unchanged_cases'],len(typed_cases))
         shortfalls=[]
         if count<300:shortfalls.append('已审图片不足300张')
         if len(cases)<100:shortfalls.append('不同售后单不足100单')
@@ -115,6 +139,15 @@ class ReviewQuality:
             shortfalls.append('按售后单计算的95%单侧下界未达到95%')
         if group['images_without_case_id']:shortfalls.append('部分图片缺少售后单分组，不计独立单数')
         group['position_sample_gate_met']=not shortfalls
+        if complete<300:shortfalls.append('具有真实类型预测的完整已审图片不足300张')
+        if len(typed_cases)<100:shortfalls.append('具有真实类型预测的已审售后单不足100单')
+        if group['fully_predicted_unchanged_rate'] is None or group['fully_predicted_unchanged_rate']<.98:
+            shortfalls.append('位置与问题类型完整未改通过率未达到98%')
+        if group['fully_predicted_case_lower95'] is None or group['fully_predicted_case_lower95']<.95:
+            shortfalls.append('完整预测按售后单计算的95%单侧下界未达到95%')
+        if group['predicted_type_correct_rate'] is None or group['predicted_type_correct_rate']<.98:
+            shortfalls.append('真实预测问题类型的人工确认正确率未达到98%')
+        group['automation_sample_gate_met']=not shortfalls
         shortfalls.extend(['独立盲测尚未通过','问题类型及责任准确率尚未验证'])
         group.update(shortfalls=shortfalls,auto_enabled=False)
         return group
@@ -149,17 +182,23 @@ class ReviewQuality:
                 unique[row['proposal_id']]=row
             rows=list(unique.values());result['scanned_proposals']=len(rows)
             receipts=self._terminal_receipts(rows,root['id'])
-            groups={};reviewed={};case_results=defaultdict(lambda:defaultdict(list))
+            groups={};reviewed={};case_results=defaultdict(lambda:defaultdict(list));typed_case_results=defaultdict(lambda:defaultdict(list))
             latest_generated=None
             keys=('whole_image_unchanged','reviewed_machine_boxes','unchanged_position_boxes','deleted_machine_boxes',
-                'moved_machine_boxes','human_added_boxes','problem_type_assigned','problem_type_changed','inherited_problem_labels')
+                'moved_machine_boxes','human_added_boxes','problem_type_assigned','problem_type_changed','inherited_problem_labels',
+                'whole_image_no_change','fully_predicted_images','fully_predicted_unchanged_images','predicted_type_reviewed_boxes',
+                'predicted_type_correct_boxes','predicted_type_changed_boxes','predicted_type_rejected_boxes')
             for row in rows:
-                data=row['proposal'];key=json.dumps([data.get('model_id'),data.get('method')],ensure_ascii=False,separators=(',',':'))
+                data=row['proposal'];type_models=sorted({box['type_provenance']['model_sha256'] for box in data.get('boxes',[]) if _predicted(box)})
+                key_parts=[data.get('model_id'),data.get('method')]
+                if type_models:key_parts.append(type_models)
+                key=json.dumps(key_parts,ensure_ascii=False,separators=(',',':'))
                 if key not in groups:
                     groups[key]={**dict.fromkeys(keys,0),'key':key,'model_id':data.get('model_id'),'method':data.get('method'),
                         'reviewed_images':0,'terminal_state_rejections':0,'images_without_case_id':0,
                         'latest_reviewed_at':None,'latest_proposal_at':row['created_at'],
-                        'type_metric_scope':'assigned_or_inherited_labels_not_model_type_accuracy'}
+                        'type_model_ids':type_models,
+                        'type_metric_scope':'genuine_model_predictions_only' if type_models else 'assigned_or_inherited_labels_not_model_type_accuracy'}
                 if latest_generated is None or row['created_at']>latest_generated[0]:latest_generated=(row['created_at'],key)
                 try:review,reason=self._review(row,receipts)
                 except (TypeError,ValueError,KeyError):review,reason=None,'unreconstructable_review'
@@ -178,7 +217,9 @@ class ReviewQuality:
                 group['latest_reviewed_at']=max(group['latest_reviewed_at'] or '',review['reviewed_at'])
                 if row['case_id']:case_results[key][row['case_id']].append(bool(stats['whole_image_unchanged']))
                 else:group['images_without_case_id']+=1
-            result['groups']=sorted((self._finish(g,case_results[key]) for key,g in groups.items()),
+                if row['case_id'] and stats['fully_predicted_images']:
+                    typed_case_results[key][row['case_id']].append(bool(stats['fully_predicted_unchanged_images']))
+            result['groups']=sorted((self._finish(g,case_results[key],typed_case_results[key]) for key,g in groups.items()),
                 key=lambda g:(g['latest_proposal_at'],g['latest_reviewed_at'] or ''),reverse=True)
             result['current']=next((g for g in result['groups'] if g['reviewed_images']),None)
             result['latest_generated_group_key']=latest_generated[1] if latest_generated else None

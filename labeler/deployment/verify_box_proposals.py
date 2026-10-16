@@ -55,7 +55,8 @@ def verify(data,manifest,output):
     if remaining:
         second=get('/api/annotations?id='+str(remaining[0]['id']))
         annotation_checkpoint=annotation_digest(store.db)
-        post('/api/annotation-proposals/reject',{'id':remaining[0]['id'],'proposal_id':second['proposal']['proposal_id']})
+        post('/api/annotation-proposals/reject',{'id':remaining[0]['id'],'proposal_id':second['proposal']['proposal_id'],
+            'expected_proposal_fingerprint':second['proposal'].get('content_fingerprint')})
         assert annotation_digest(store.db)==annotation_checkpoint;rejected=1
     assert digest(store.db)==before
     report={'status':'passed','isolated_database':str(data/'labels.sqlite3'),
