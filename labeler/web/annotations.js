@@ -18,7 +18,8 @@
     return {x:view.width/2+view.panX+view.zoom*(Math.cos(radians)*px-Math.sin(radians)*py),
       y:view.height/2+view.panY+view.zoom*(Math.sin(radians)*px+Math.cos(radians)*py)};
   }
-  const geometry={imageRect,imagePoint,screenPoint};global.AnnotationGeometry=geometry;
+  function overlapRatio(a,b){const width=Math.max(0,Math.min(a.x+a.w,b.x+b.w)-Math.max(a.x,b.x)),height=Math.max(0,Math.min(a.y+a.h,b.y+b.h)-Math.max(a.y,b.y));return width*height/Math.min(a.w*a.h,b.w*b.h);}
+  const geometry={imageRect,imagePoint,screenPoint,overlapRatio};global.AnnotationGeometry=geometry;
   if(typeof document==='undefined'){if(typeof module!=='undefined')module.exports=geometry;return;}
   const A={id:null,active:false,loading:false,source:null,version:0,boxes:[],outcome:'boxed',labelFingerprint:'',
     review:null,dirty:false,revision:0,tail:Promise.resolve(),timer:null,undo:[],selected:'',draw:false,drag:null,
@@ -38,12 +39,42 @@
   function problemOrder(){return [...new Set([...(S.tags.defect||[]),...(S.current?.label?.defects||[])])];}
   function defaultProblem(){const existing=S.current?.label?.defects||[];return [selectedBox()?.problem,existing.includes(S.responsibilityProblem)?S.responsibilityProblem:'',existing.includes(A.lastProblem)?A.lastProblem:'',...existing,A.lastProblem,el('boxProblem').value,...problemOrder()].find(name=>problemOrder().includes(name))||'';}
   function standardResponsibilities(problem,box){
+    if(box&&Object.hasOwn(box,'responsibilities'))return [...box.responsibilities];
+    const label=S.current?.label,mapping=label?.problem_responsibilities;
+    if(mapping&&Object.hasOwn(mapping,problem))return [...mapping[problem]];
     if(S.rules?.[problem])return [S.rules[problem]];
-    const label=S.current?.label;return [...(box?.responsibilities||label?.problem_responsibilities?.[problem]||(label?.defects?.length===1&&label.defects[0]===problem?label.responsibilities:[])||[])];
+    return [...(label?.defects?.length===1&&label.defects[0]===problem?label.responsibilities||[]:[])];
   }
+  function manualResponsibility(problem,box){
+    const automatic=S.rules?.[problem],roles=standardResponsibilities(problem,box);
+    return box?.responsibility_override===true||!!S.current?.label?.responsibility_overrides?.includes(problem)||!automatic||roles.length!==1||roles[0]!==automatic;
+  }
+  function responsibilityFields(problem){return {responsibilities:standardResponsibilities(problem),...(manualResponsibility(problem)?{responsibility_override:true}:{})};}
   function updatesForBoxes(boxes){
     const mapping={};for(const box of boxes)if(Object.hasOwn(box,'responsibilities'))mapping[box.problem]=[...new Set([...(mapping[box.problem]||[]),...box.responsibilities])];
-    const defects=Object.keys(mapping);return defects.length?{defects,responsibilities:[...new Set(Object.values(mapping).flat())],problem_responsibilities:mapping}:null;
+    const defects=Object.keys(mapping),overrides=[...new Set(boxes.filter(box=>box.responsibility_override===true&&Object.hasOwn(mapping,box.problem)).map(box=>box.problem))];
+    return defects.length?{defects,responsibilities:[...new Set(Object.values(mapping).flat())],problem_responsibilities:mapping,...(overrides.length?{responsibility_overrides:overrides}:{})}:null;
+  }
+  function conflictingRegions(box){return box?A.negativeRegions.filter(region=>overlapRatio(box,region)>=.5):[];}
+  function firstConflict(boxes=displayBoxes()){for(const box of boxes){const regions=conflictingRegions(box);if(regions.length)return {box,regions};}return null;}
+  function regionName(region){return region.reason==='process_hole'?'工艺孔':region.reason==='normal_structure'?'正常结构':'已删除误报区域';}
+  function conflictMessage(box,regions){return '“'+box.problem+'”与 '+regions.length+' 处'+[...new Set(regions.map(regionName))].join(' / ')+'重叠，请选择保留一项。';}
+  function showConflict(conflict){
+    if(!conflict)return;const {box,regions}=conflict;A.active=true;A.quickFlow=true;A.draw=false;A.selected=box.id;
+    if(A.popup?.boxId!==box.id){const rect=stage.getBoundingClientRect(),point=screenPoint(box.x+box.w,box.y+box.h,view());openPopup(box,rect.left+point.x,rect.top+point.y);}
+    A.popup.error=conflictMessage(box,regions);render();
+  }
+  function requireNoConflicts(boxes=displayBoxes()){const conflict=firstConflict(boxes);if(conflict){showConflict(conflict);throw new Error(conflictMessage(conflict.box,conflict.regions));}}
+  function resolveConflict(keepProblem){
+    if(!ready()||S.busy)return;const box=popupBox(),regions=conflictingRegions(box);if(!box||!regions.length)return;
+    const ids=new Set(regions.map(region=>region.id));closePopup();
+    change(()=>{
+      if(keepProblem){A.negativeRegions=A.negativeRegions.filter(region=>!ids.has(region.id));A.selected=box.id;}
+      else{if(box.suggestion)adoptSuggestions();A.boxes=A.boxes.filter(current=>current.id!==box.id&&!(box.suggestion&&current.source_box_id===box.source_box_id));A.selected='';}
+      if(!A.boxes.length&&A.negativeRegions.length&&!suggestionBoxes().length)A.outcome='needs_correction';
+    });
+    const next=firstConflict();if(next)showConflict(next);else if(keepProblem){const rect=stage.getBoundingClientRect();openPopup(selectedBox(),rect.left+20,rect.top+20);}
+    toast(keepProblem?'已保留问题，撤销 '+regions.length+' 处冲突区域；其他框保留，可撤销':'已保留记录区域，移除当前问题框；其他框保留，可撤销');
   }
   function annotationSnapshot(){return {boxes:structuredClone(A.boxes),negativeRegions:structuredClone(A.negativeRegions),outcome:A.outcome,proposalId:A.proposalId,selected:A.selected};}
   function closePopup(){A.popup=null;el('boxEditor').hidden=true;}
@@ -67,26 +98,31 @@
     editor.style.top=Math.max(top,Math.min(y,bottom-height))+'px';
   }
   function editPopup(action){
-    if(!A.popup)return;A.popup.changed=true;
+    if(!A.popup)return;A.popup.changed=true;A.popup.error='';
     change(()=>{const box=A.boxes.find(b=>b.id===A.selected);if(box){A.popup.boxId=box.id;action(box);}},true);
   }
   function renderPopup(){
     const editor=el('boxEditor'),box=popupBox();editor.hidden=!box;if(!box){A.popup=null;return;}
-    const automatic=S.rules?.[box.problem],roles=standardResponsibilities(box.problem,box);
+    const automatic=S.rules?.[box.problem],roles=standardResponsibilities(box.problem,box),conflicts=conflictingRegions(box);
     if(el('boxEditorTitle'))el('boxEditorTitle').textContent=box.suggestion?'纠正机器框':'标注问题位置';
     el('boxEditorProblems').replaceChildren();
-    for(const name of problemOrder()){const button=document.createElement('button');button.type='button';button.textContent=name;button.setAttribute('aria-pressed',String(name===box.problem));button.classList.toggle('existing-problem',(S.current?.label?.defects||[]).includes(name));button.addEventListener('click',()=>editPopup(current=>{
-      current.problem=name;current.responsibilities=standardResponsibilities(name);A.lastProblem=name;
-    }));el('boxEditorProblems').append(button);}
+    for(const name of problemOrder()){const button=document.createElement('button');button.type='button';button.textContent=name;button.setAttribute('aria-pressed',String(name===box.problem));button.classList.toggle('existing-problem',(S.current?.label?.defects||[]).includes(name));button.addEventListener('click',()=>{if(name===box.problem)return;editPopup(current=>{
+      current.problem=name;delete current.responsibility_override;Object.assign(current,responsibilityFields(name));A.lastProblem=name;
+    });});el('boxEditorProblems').append(button);}
     el('boxEditorResponsibilitySection').hidden=false;
     el('boxEditorHint').textContent='空格确认此框并继续标下一处 · Enter 保存整张并下一张';
-    if(el('boxEditorAutomatic')){el('boxEditorAutomatic').hidden=!automatic;el('boxEditorAutomatic').textContent=automatic?'按标准自动：'+automatic:'';}
-    if(el('boxEditorResponsibilityHint'))el('boxEditorResponsibilityHint').textContent=automatic?'此问题按标准定责；其他责任仅供查看。':'可多选，不确定选待核。';
+    if(el('boxEditorAutomatic')){el('boxEditorAutomatic').hidden=!automatic;el('boxEditorAutomatic').textContent=automatic?'默认：'+automatic:'';}
+    if(el('boxEditorRestoreDefault')){const restore=el('boxEditorRestoreDefault');restore.hidden=!automatic;restore.disabled=S.busy||roles.length===1&&roles[0]===automatic;restore.textContent=restore.disabled&&!S.busy?'已用默认':'恢复默认';}
+    if(el('boxEditorResponsibilityHint'))el('boxEditorResponsibilityHint').textContent=manualResponsibility(box.problem,box)?'已按人工选择，可多选；不确定选待核。':'点击其他责任即可纠正默认责任。';
+    if(el('boxEditorError')){const message=conflicts.length?conflictMessage(box,conflicts):A.popup?.error||'';el('boxEditorError').textContent=message;el('boxEditorError').hidden=!message;}
+    if(el('boxEditorConflictActions'))el('boxEditorConflictActions').hidden=!conflicts.length;
+    if(el('boxEditorKeepProblem')){el('boxEditorKeepProblem').disabled=S.busy;el('boxEditorKeepProblem').title='保留这个问题框，撤销它重叠的 '+conflicts.length+' 处记录区域；其他框与分类保留，可撤销';}
+    if(el('boxEditorKeepNormal')){el('boxEditorKeepNormal').disabled=S.busy;el('boxEditorKeepNormal').title='保留这些记录区域，仅移除这个问题框；其他框与分类保留，可撤销';el('boxEditorKeepNormal').textContent=conflicts.every(region=>region.reason==='false_positive')?'保留误报判定':'保留正常区域';}
     el('boxEditorResponsibilities').replaceChildren();
     const available=[...new Set([...(S.tags.responsibility||[]),'待核'])],priority=['运输','安装','其他','待核'],later=['生产','原材料'];
     const roleOrder=[...priority.filter(name=>available.includes(name)),...available.filter(name=>!priority.includes(name)&&!later.includes(name)),...available.filter(name=>later.includes(name))];
-    for(const name of roleOrder.filter(name=>name!==automatic)){const button=document.createElement('button');button.type='button';button.textContent=name;button.disabled=!!automatic;button.setAttribute('aria-pressed',String(roles.includes(name)));button.addEventListener('click',()=>{if(automatic)return;editPopup(current=>{
-      let values=standardResponsibilities(current.problem,current);values=values.includes(name)?values.filter(v=>v!==name):name==='待核'?['待核']:[...values.filter(v=>v!=='待核'),name];current.responsibilities=values;
+    for(const name of roleOrder.filter(name=>name!==automatic)){const button=document.createElement('button');button.type='button';button.textContent=name;button.disabled=S.busy;button.setAttribute('aria-pressed',String(roles.includes(name)));button.addEventListener('click',()=>{editPopup(current=>{
+      const currentRoles=standardResponsibilities(current.problem,current),defaultOnly=automatic&&currentRoles.length===1&&currentRoles[0]===automatic;let values=defaultOnly?[]:currentRoles;values=values.includes(name)?values.filter(v=>v!==name):name==='待核'?['待核']:[...values.filter(v=>v!=='待核'),name];current.responsibilities=values;current.responsibility_override=true;
     });});el('boxEditorResponsibilities').append(button);}
     // Keep the action reachable so missing responsibility can produce a useful inline error.
     el('boxEditorDone').disabled=S.busy;popupPosition();
@@ -94,9 +130,10 @@
   function openPopup(box,x,y,before=null){if(!box)return;A.popup={boxId:box.id,x,y,before:before||annotationSnapshot(),undoLength:A.undo.length-(before?1:0),changed:!!before};renderPopup();}
   function confirmCurrentBox(){
     const box=popupBox();if(!box)return true;
+    requireNoConflicts([box]);
     const roles=standardResponsibilities(box.problem,box);
-    if(!box.problem||!roles.length)throw new Error('请先为“'+(box.problem||'当前问题')+'”选择责任，拿不准可选待核');
-    if(box.suggestion||!Object.hasOwn(box,'responsibilities')||JSON.stringify(box.responsibilities)!==JSON.stringify(roles))editPopup(current=>{current.responsibilities=roles;});
+    if(!box.problem||!roles.length){A.popup.error='请先为“'+(box.problem||'当前问题')+'”选择责任，拿不准可选待核';renderPopup();throw new Error(A.popup.error);}
+    if(box.suggestion||!Object.hasOwn(box,'responsibilities')||JSON.stringify(box.responsibilities)!==JSON.stringify(roles))editPopup(current=>{current.responsibilities=roles;if(manualResponsibility(current.problem,current))current.responsibility_override=true;});
     A.lastProblem=box.problem;closePopup();return true;
   }
   function continueBox(){
@@ -130,9 +167,9 @@
     svg.setAttribute('viewBox','0 0 '+v.width+' '+v.height);svg.style.transform=el('photo').style.transform;
     const rect=imageRect(v),boxes=displayBoxes().map(box=>A.drag?.original?.id===box.id?{...box,...A.drag.box}:box);
     if(A.drag?.kind==='draw')boxes.push({...A.drag.box,id:'preview',problem:el('boxProblem').value});
-    for(const region of A.negativeRegions){const x=rect.x+region.x*rect.width,y=rect.y+region.y*rect.height;
-      svg.append(svgNode('rect',{x,y,width:region.w*rect.width,height:region.h*rect.height,fill:'none',stroke:'#ffbd69','stroke-width':2,'stroke-dasharray':'2 5','vector-effect':'non-scaling-stroke'}));
-      overlayLabel(svg,x,y,region.reason==='process_hole'?'工艺孔 · 非破损':region.reason==='normal_structure'?'正常结构 · 非破损':'误报已移除');}
+    for(const region of A.negativeRegions){const x=rect.x+region.x*rect.width,y=rect.y+region.y*rect.height,conflict=displayBoxes().some(box=>overlapRatio(box,region)>=.5);
+      svg.append(svgNode('rect',{x,y,width:region.w*rect.width,height:region.h*rect.height,fill:conflict?'#ffbd69':'none','fill-opacity':conflict?.32:0,stroke:'#ffbd69','stroke-width':conflict?4:2,'stroke-dasharray':conflict?'8 4':'2 5','vector-effect':'non-scaling-stroke'}));
+      overlayLabel(svg,x,y,(conflict?'冲突 · ':'')+(region.reason==='process_hole'?'工艺孔 · 非破损':region.reason==='normal_structure'?'正常结构 · 非破损':'已删除误报区域'));}
     for(const [index,box] of boxes.entries()){
       const x=rect.x+box.x*rect.width,y=rect.y+box.y*rect.height,selected=box.id===A.selected||box.id==='preview';
       const color=selected?'#ff453a':box.suggestion?'#d58aff':'#00e6a0';
@@ -184,9 +221,11 @@
     if(A.error||A.saveError)text=A.error||A.saveError;if(A.readOnly)text='原图已经变化，已保留原补标。请先核对源文件，再重新读取。';
     el('errorReviewSummary').textContent=text;el('errorReviewSummary').title=text;renderOverlay();renderPopup();
   }
-  function change(action,adopt=false){
-    if(!ready()||S.busy)return;A.undo.push({boxes:structuredClone(A.boxes),negativeRegions:structuredClone(A.negativeRegions),outcome:A.outcome,proposalId:A.proposalId,selected:A.selected});if(A.undo.length>30)A.undo.shift();
-    if(adopt)adoptSuggestions();action();A.saveError='';A.dirty=true;A.revision++;render();clearTimeout(A.timer);A.timer=setTimeout(()=>save().catch(fail),500);
+  function change(action,adopt=false,prospectiveSuggestions=null){
+    if(!ready()||S.busy)return false;
+    if(adopt){const conflict=firstConflict(prospectiveSuggestions||suggestionBoxes());if(conflict){showConflict(conflict);toast('机器框与已有纠错区域冲突，请先选择保留一项');return false;}}
+    A.undo.push({boxes:structuredClone(A.boxes),negativeRegions:structuredClone(A.negativeRegions),outcome:A.outcome,proposalId:A.proposalId,selected:A.selected});if(A.undo.length>30)A.undo.shift();
+    if(adopt)adoptSuggestions();action();A.saveError='';A.dirty=true;A.revision++;render();clearTimeout(A.timer);A.timer=setTimeout(()=>save().catch(fail),500);return true;
   }
   async function save(status='draft'){
     clearTimeout(A.timer);if(!A.id||(!A.dirty&&status==='draft'))return A.tail;
@@ -219,6 +258,7 @@
   async function confirm(){
     if(!ready()||S.busy||S.navigating)return;
     if(A.drag)throw new Error('请先松开鼠标完成当前框选，再保存整张图片');
+    requireNoConflicts(A.outcome==='boxed'?displayBoxes():A.boxes);
     confirmCurrentBox();
     if(A.outcome==='boxed'&&suggestionBoxes().length)change(()=>{},true);
     if(A.outcome==='boxed'&&!A.boxes.length&&A.negativeRegions.length)A.outcome='needs_correction';
@@ -236,6 +276,9 @@
   el('toggleAnnotations').addEventListener('click',()=>{(async()=>{await save();if(A.quickFlow){A.quickFlow=false;A.active=true;}else A.active=!A.active;if(A.active&&S.current&&!A.source)await loadForImage(S.current);else render();})().catch(fail);});
   el('drawBox').addEventListener('click',()=>{A.draw=!A.draw;A.selected='';render();});
   el('editBoxDetails').addEventListener('click',()=>{const box=selectedBox();if(!box)return;const rect=stage.getBoundingClientRect();openPopup(box,rect.left+20,rect.top+20);});
+  el('boxEditorKeepProblem')?.addEventListener('click',()=>resolveConflict(true));
+  el('boxEditorKeepNormal')?.addEventListener('click',()=>resolveConflict(false));
+  el('boxEditorRestoreDefault')?.addEventListener('click',()=>{const box=popupBox(),automatic=S.rules?.[box?.problem];if(automatic)editPopup(current=>{current.responsibilities=[automatic];current.responsibility_override=true;});});
   el('boxEditorDone').addEventListener('click',()=>{try{continueBox();}catch(error){fail(error);}});
   el('boxEditorClose').addEventListener('click',()=>{try{confirmCurrentBox();A.draw=false;render();}catch(error){fail(error);}});
   el('boxSelect').addEventListener('change',()=>{A.selected=el('boxSelect').value;A.draw=false;const box=selectedBox();if(box)el('boxProblem').value=box.problem;render();});
@@ -243,31 +286,33 @@
     A.negativeRegions.push({id:clientId(),x:box.x,y:box.y,w:box.w,h:box.h,reason,...(box.source_box_id||box.origin==='model'?{source_box_id:box.source_box_id||box.id}:{})});
   }
   function removeSelected(reason='false_positive'){
-    if(!selectedBox())return;
-    change(()=>{const box=A.boxes.find(b=>b.id===A.selected);if(!box)return;
-      if(box.origin==='model')markNegative(box,reason);
+    const target=selectedBox();if(!target)return;let duplicate=false;
+    const changed=change(()=>{const box=A.boxes.find(b=>b.id===A.selected);if(!box)return;
+      duplicate=reason==='false_positive'&&box.origin==='model'&&A.boxes.some(other=>other.id!==box.id&&overlapRatio(box,other)>=.5);
+      if(box.origin==='model'&&!duplicate)markNegative(box,reason);
       A.boxes=A.boxes.filter(b=>b.id!==A.selected);A.selected='';
-      if(!A.boxes.length&&A.negativeRegions.length)A.outcome='needs_correction';},true);
+      if(!A.boxes.length&&A.negativeRegions.length)A.outcome='needs_correction';},true,target.suggestion?suggestionBoxes().filter(box=>box.id!==target.id):null);
+    if(changed&&duplicate)toast('已移除重复机器框，保留问题区域');
   }
   el('deleteBox').addEventListener('click',()=>removeSelected());
   el('processHoleBox').addEventListener('click',()=>{if(selectedBox()?.origin==='model')removeSelected('process_hole');});
   el('normalStructureBox').addEventListener('click',()=>{if(selectedBox()?.origin==='model')removeSelected('normal_structure');});
   function relabelSelected(){const chosen=el('boxProblem').value,selected=selectedBox();if(!selected||selected.problem===chosen)return;
-    change(()=>{const box=A.boxes.find(b=>b.id===A.selected);if(box){box.problem=chosen;box.responsibilities=standardResponsibilities(chosen);A.lastProblem=chosen;}},true);
+    change(()=>{const box=A.boxes.find(b=>b.id===A.selected);if(box){box.problem=chosen;delete box.responsibility_override;Object.assign(box,responsibilityFields(chosen));A.lastProblem=chosen;}},true);
     if(!S.rules?.[chosen]){const rect=stage.getBoundingClientRect();openPopup(selectedBox(),rect.left+20,rect.top+20);}}
   el('relabelBox').addEventListener('click',relabelSelected);
   el('boxProblem').addEventListener('change',relabelSelected);
   el('undoBox').addEventListener('click',undo);
   el('adoptAutoBoxes').addEventListener('click',()=>{
     if(!ready()||S.busy||!proposalCurrent()||A.proposal.status!=='pending'||proposalAdopted())return;
-    change(()=>{A.selected=A.boxes.at(-1)?.id||'';A.draw=false;},true);
+    if(!change(()=>{A.selected=A.boxes.at(-1)?.id||'';A.draw=false;},true))return;
     toast('建议已加入草稿，可直接调整；按 Enter 确认并下一张');
   });
   el('rejectAutoBoxes').addEventListener('click',()=>{
     if(!ready()||S.busy||!proposalCurrent()||A.proposal.status!=='pending')return;
     change(()=>{const removed=A.boxes.filter(box=>box.origin==='model'&&box.proposal_id===A.proposalId);
-      for(const box of removed)markNegative(box,'false_positive');A.boxes=A.boxes.filter(box=>!removed.includes(box));
-      A.selected='';if(!A.boxes.length&&A.negativeRegions.length)A.outcome='needs_correction';},true);
+      const kept=A.boxes.filter(box=>!removed.includes(box));for(const box of removed)if(!kept.some(other=>overlapRatio(box,other)>=.5))markNegative(box,'false_positive');A.boxes=kept;
+      A.selected='';if(!A.boxes.length&&A.negativeRegions.length)A.outcome='needs_correction';},true,[]);
     toast('已移除本批机器框，已有人工框保留；可撤销，按 Enter 确认纠错');
   });
   el('reviewOutcome').addEventListener('change',()=>{const value=el('reviewOutcome').value;change(()=>{A.outcome=value;});});
@@ -283,7 +328,7 @@
     const right=event.button===2;
     if((!A.active&&!right)||!ready()||S.busy||el('photo').hidden||event.target.closest('button')||event.target.closest('#boxEditor')||(event.button!==undefined&&event.button!==0&&!right))return;
     if(A.drag){consume(event);return;}
-    if(A.popup){try{confirmCurrentBox();}catch(error){consume(event);fail(error);return;}}
+    if(A.popup){if(conflictingRegions(popupBox()).length)closePopup();else try{confirmCurrentBox();}catch(error){consume(event);fail(error);return;}}
     if(right){if(!A.active)A.quickFlow=true;A.active=true;A.draw=false;}
     const point=pointer(event),selected=selectedBox(),corner=selected&&!A.draw?cornerHit(event,selected):-1;
     if((A.draw||right)&&point.inside)A.drag={kind:'draw',start:point,box:{x:point.x,y:point.y,w:0,h:0},popup:true,problem:defaultProblem(),before:annotationSnapshot()};
@@ -306,9 +351,10 @@
     if(!A.drag||A.drag.pointerId!==event.pointerId)return;consume(event);const drag=A.drag,box=drag.box;A.drag=null;stage.releasePointerCapture?.(event.pointerId);
     const rect=imageRect(view());if(box.w*rect.width*S.zoom<4||box.h*rect.height*S.zoom<4){renderOverlay();toast('框太小，请放大图片后重新框选');return;}
     if(drag.kind!=='draw'&&['x','y','w','h'].every(key=>Math.abs(box[key]-drag.original[key])<1e-8)){openPopup(selectedBox(),event.clientX,event.clientY);render();return;}
-    change(()=>{if(drag.kind==='draw'){const id=clientId(),problem=drag.popup?drag.problem:el('boxProblem').value;A.boxes.push({...box,id,problem,origin:'human',...(drag.popup?{responsibilities:standardResponsibilities(problem)}:{})});A.selected=id;A.lastProblem=problem;}
+    const changed=change(()=>{if(drag.kind==='draw'){const id=clientId(),problem=drag.popup?drag.problem:el('boxProblem').value;A.boxes.push({...box,id,problem,origin:'human',...(drag.popup?responsibilityFields(problem):{})});A.selected=id;A.lastProblem=problem;}
       else{const existing=A.boxes.find(b=>b.id===drag.original.id||drag.original.suggestion&&b.source_box_id===drag.original.source_box_id);if(existing){Object.assign(existing,{x:box.x,y:box.y,w:box.w,h:box.h});A.selected=existing.id;}}
-      A.outcome='boxed';},true);
+      A.outcome='boxed';},true,drag.original?.suggestion?suggestionBoxes().map(candidate=>candidate.id===drag.original.id?{...candidate,...box}:candidate):null);
+    if(!changed)return;
     if(drag.popup){A.draw=false;openPopup(selectedBox(),event.clientX,event.clientY,drag.before);}
   },true);
   function cancelDrag(){const pointerId=A.drag?.pointerId;A.drag=null;if(pointerId!==undefined&&stage.hasPointerCapture?.(pointerId))stage.releasePointerCapture(pointerId);renderOverlay();}

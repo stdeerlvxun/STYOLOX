@@ -113,7 +113,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "59c3c2186ea21952db0586c2486522e982d4c04b",
+    "source_commit": "c06db04280c2948368f10240fcb887c4681164bb",
     "files": [
       {
         "path": ".gitignore",
@@ -121,11 +121,11 @@
       },
       {
         "path": "DESIGN.md",
-        "sha256": "3b6695d52cfaa3bae98b3f9e415dadf246e91784fc2d455219c78e3cad9b4e30"
+        "sha256": "c106d5a4d245c28e1a6e3aa0d4f61d7304953be1a66456441e24ce96e9ea86a0"
       },
       {
         "path": "PRODUCT.md",
-        "sha256": "6f9293a4b62e566ab9a286274ad34310cc6a4831f96e2cff189399a75638430f"
+        "sha256": "a60fdc1471a36aaa9a3235753e8d670d6a1610ffea203660caa96feda62a88a7"
       },
       {
         "path": "README.md",
@@ -133,7 +133,7 @@
       },
       {
         "path": "annotations.py",
-        "sha256": "2d3b34512e88990c9d0161c7c7f3436c9eaff607d87e4fe22aa52d76779320c7"
+        "sha256": "4106ed320bbef52ed464a987b2286b6a0cd1fe21fc561aeeeee389d63d2990b3"
       },
       {
         "path": "app.py",
@@ -229,7 +229,7 @@
       },
       {
         "path": "test_annotations.py",
-        "sha256": "ec7cc7627d976f16f17d761227f792e07b801da584d821e4d525616b788fbd39"
+        "sha256": "88682ce19e8a5991765db5f03e83c9bca2c0ff395bb79b08471255590f935bfe"
       },
       {
         "path": "test_app.py",
@@ -237,7 +237,7 @@
       },
       {
         "path": "test_box_flow_ui.cjs",
-        "sha256": "2210fb4776d489cbb0ff239f17f2d05a938ec05cbd3bb605fb33fc52ddf5d1fe"
+        "sha256": "004ab21c8b78ba1e960c84a013c8e3445beaca16eccbe40d99909d7d806ed08b"
       },
       {
         "path": "test_box_proposals.py",
@@ -261,7 +261,7 @@
       },
       {
         "path": "web/annotations.js",
-        "sha256": "fdf7a0325fa9aa7d7b9944cd87516985aec8110d67a4e953b21888307f375631"
+        "sha256": "e810edc58785285b7ebe6a5769e6c93f17607f8fd6c06acebedc7d8f3bf1e0d1"
       },
       {
         "path": "web/app.js",
@@ -269,11 +269,11 @@
       },
       {
         "path": "web/index.html",
-        "sha256": "c205245dfc01d2f95a5d86255199a6b222b6b8d8358232e68757b88f79528b1f"
+        "sha256": "aecaf49326c080ce429e841ecafa8fa7ba05b422b20bd49a13e387609ea27c5d"
       },
       {
         "path": "web/style.css",
-        "sha256": "2d222cc635941cf2fc2e82004fd9aa242261c601c6ff547006c14ecee75a7b9d"
+        "sha256": "2f5bef70e8a74f3ee7eca5c053c9c8b643f540ae76c6c4bbdf2b68957739b0ac"
       },
       {
         "path": "启动分类工具.cmd",

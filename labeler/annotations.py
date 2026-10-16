@@ -273,11 +273,11 @@ class Annotations:
         return values
 
     def _classification_append(self, image_id, body, boxes, previous, label, status):
-        """Prepare an explicit union without writing: the caller owns the one transaction."""
+        """Prepare append-only problems and explicit responsibility corrections atomically."""
         from app import RESPONSIBILITY_RULES
         updates=body['classification_updates']
         if not isinstance(updates,dict):raise ValueError('问题点追加格式不正确')
-        if any(k not in ('defects','responsibilities','problem_responsibilities') for k in updates):
+        if any(k not in ('defects','responsibilities','problem_responsibilities','responsibility_overrides') for k in updates):
             raise ValueError('框选仅支持追加问题点和责任')
         problems=updates.get('defects',[])
         if (not isinstance(problems,list) or len(problems)>40 or
@@ -288,6 +288,12 @@ class Annotations:
         if not isinstance(mapping,dict) or any(p not in problems for p in mapping):
             raise ValueError('问题点责任格式不正确')
         mapping={p:self._box_roles(v) for p,v in mapping.items()}
+        requested=list(dict.fromkeys(problems+[b['problem'] for b in boxes]))
+        overrides=updates.get('responsibility_overrides',[])
+        if (not isinstance(overrides,list) or len(overrides)>40 or
+            any(not isinstance(p,str) or p not in requested for p in overrides)):
+            raise ValueError('人工责任纠正格式不正确')
+        overrides=set(overrides)|{b['problem'] for b in boxes if b.get('responsibility_override') is True}
         committed=json.loads(label['data']) if label else None
         draft=self.store.one('SELECT * FROM drafts WHERE image_id=?',(image_id,))
         visible=json.loads(draft['data']) if draft else None
@@ -312,33 +318,40 @@ class Annotations:
             for p,roles in visible_mapping.items():resolved[p]=list(dict.fromkeys(resolved.get(p,[])+roles))
             base['note']=visible.get('note','')
         old_boxes={b['id']:b for b in (previous or {}).get('boxes',[])}
-        requested=list(dict.fromkeys(problems+[b['problem'] for b in boxes]))
+        # Preserve unattributed legacy responsibility values; corrections replace only
+        # the old responsibility values attributable to the explicitly edited issue.
+        attributed={r for roles in resolved.values() for r in roles}
+        legacy_roles=[r for r in base['responsibilities'] if r not in attributed]
+        box_mapping={}
         for box in boxes:
             problem=box['problem'];old=old_boxes.get(box['id'],{})
             roles=box.get('responsibilities',mapping.get(problem))
             if roles is None and old.get('problem')==problem:roles=old.get('responsibilities')
             if roles is None:roles=resolved.get(problem,[])
             roles=self._box_roles(roles)
-            if problem in RESPONSIBILITY_RULES:roles=[RESPONSIBILITY_RULES[problem]]
+            if not roles and problem not in overrides and problem in RESPONSIBILITY_RULES:
+                roles=[RESPONSIBILITY_RULES[problem]]
             if status=='confirmed' and not roles:
                 raise ValueError('请为“'+problem+'”选择责任；不确定可选“待核”')
             box['responsibilities']=roles
-            mapping[problem]=roles if problem in RESPONSIBILITY_RULES else list(dict.fromkeys(mapping.get(problem,[])+roles))
+            box_mapping[problem]=list(dict.fromkeys(box_mapping.get(problem,[])+roles))
         for problem in requested:
-            roles=mapping.get(problem,[])
-            if problem in RESPONSIBILITY_RULES:roles=[RESPONSIBILITY_RULES[problem]]
-            if not roles:roles=resolved.get(problem,[])
+            roles=box_mapping.get(problem,mapping.get(problem,[]))
+            if not roles and problem not in overrides:roles=resolved.get(problem,[])
+            if not roles and problem not in overrides and problem in RESPONSIBILITY_RULES:
+                roles=[RESPONSIBILITY_RULES[problem]]
             if status=='confirmed' and not roles:
                 raise ValueError('请为“'+problem+'”选择责任；不确定可选“待核”')
-            resolved[problem]=list(dict.fromkeys(resolved.get(problem,[])+roles))
+            resolved[problem]=roles if problem in overrides else list(dict.fromkeys(resolved.get(problem,[])+roles))
+            mapping[problem]=roles
         base['defects']=list(dict.fromkeys(base['defects']+requested))
         base['problem_responsibilities']=resolved
-        base['responsibilities']=list(dict.fromkeys(base['responsibilities']+[r for roles in resolved.values() for r in roles]))
+        base['responsibilities']=list(dict.fromkeys(legacy_roles+[r for roles in resolved.values() for r in roles]))
         if len(base['responsibilities'])>1 and '待核' in base['responsibilities']:base['responsibilities'].remove('待核')
         if base['defects']:base['image_state']='defect'
         if len(base['defects'])>40:raise ValueError('每张图片最多40个问题点')
         return base,draft,{'defects':requested,
-            'problem_responsibilities':mapping}
+            'problem_responsibilities':mapping,'responsibility_overrides':[p for p in requested if p in overrides]}
 
     def save(self, image_id, body):
         source = self.source(image_id)
@@ -364,6 +377,9 @@ class Annotations:
             if min(x,y)<0 or min(w,h)<=0 or x+w>1.000001 or y+h>1.000001:raise ValueError('问题框必须位于原图内')
             item=dict(id=identity,problem=problem,x=x,y=y,w=min(w,1-x),h=min(h,1-y))
             if 'responsibilities' in box:item['responsibilities']=self._box_roles(box['responsibilities'])
+            if 'responsibility_override' in box:
+                if type(box['responsibility_override']) is not bool:raise ValueError('人工责任纠正标记不正确')
+                item['responsibility_override']=box['responsibility_override']
             if box.get('origin')=='model':
                 if not proposal_id or box.get('proposal_id')!=proposal_id:raise ValueError('模型框来源不正确')
                 item.update(origin='model',proposal_id=proposal_id)
@@ -384,6 +400,8 @@ class Annotations:
                 old=previous_boxes.get(box['id'],{})
                 if 'responsibilities' not in box and old.get('problem')==box['problem'] and 'responsibilities' in old:
                     box['responsibilities']=list(old['responsibilities'])
+                if 'responsibility_override' not in box and old.get('problem')==box['problem'] and 'responsibility_override' in old:
+                    box['responsibility_override']=old['responsibility_override']
             regions=clean_negative_regions(body.get('negative_regions',previous.get('negative_regions',[]) if previous else []))
             if status=='confirmed':reject_conflicting_regions(clean,regions)
             if proposal_id:

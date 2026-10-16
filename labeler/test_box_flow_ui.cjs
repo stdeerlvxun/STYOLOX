@@ -17,6 +17,7 @@ class Element{
   el('labelPanel').hidden=true;
   const label={defects:['崩边','划伤'],responsibilities:['生产'],problem_responsibilities:{崩边:['生产'],划伤:[]},image_state:'defect',note:'原备注'};
   const human={id:'retained-human',problem:'崩边',x:.01,y:.01,w:.08,h:.08,origin:'human'};
+  let fixtureBoxes=[structuredClone(human)],fixtureRegions=[],fixtureProposal=null,fixtureProposalId=null;
   let version=0,ids=0,navigations=0,reads=0,rejectConfirmation=false,retainedInQueue=true;const navigationIndexes=[];
   const context=vm.createContext({structuredClone,Promise,setTimeout(){return 1;},clearTimeout(){},
     document:{getElementById:el,createElement:tag=>new Element(tag),createElementNS:(_,tag)=>new Element(tag),addEventListener(type,handler){if(type==='keydown')keys.push(handler);},body:new Element('body')},
@@ -25,7 +26,7 @@ class Element{
     clientId:()=>'new-'+(++ids),fail:e=>failures.push(e),toast(){},renderTags(){},params:args=>new URLSearchParams(args).toString(),async refreshState(){},async reload({index}){navigations++;navigationIndexes.push(index);},
     async api(path,body){if(path==='/api/annotation-feedback/state')return {confirmed_corrections:6};
       if(path.startsWith('/api/images?'))return {items:[{id:retainedInQueue?7:8}],total:3};
-      if(!body){reads++;return {source:{sha256:'source',width:1600,height:900},document:{boxes:[structuredClone(human)],negative_regions:[],outcome:'boxed'},version,label_fingerprint:'old-label'};}
+      if(!body){reads++;return {source:{sha256:'source',width:1600,height:900},document:{boxes:structuredClone(fixtureBoxes),negative_regions:structuredClone(fixtureRegions),outcome:'boxed',proposal_id:fixtureProposalId},proposal:structuredClone(fixtureProposal),version,label_fingerprint:'old-label'};}
       assert.equal(path,'/api/annotations');assert.equal(body.expected_version,version);writes.push(structuredClone(body));
       if(body.status==='confirmed'&&rejectConfirmation){rejectConfirmation=false;throw new Error('分类草稿已经变化，请重新读取');}
       version++;return {version,label_fingerprint:body.status==='confirmed'?'confirmed-label':'old-label',...(body.status==='confirmed'?{label:structuredClone(label)}:{})};
@@ -47,13 +48,26 @@ class Element{
   assert.equal(el('annotationBar').hidden,true,'First quick draw must keep the canvas height stable instead of inserting a toolbar mid-drag');assert.equal(el('boxEditor').hidden,false);
   assert.deepEqual(el('boxEditorProblems').children.map(b=>b.textContent),['残胶','划伤','崩边'],'Problem order stays fixed while existing problems remain selected');
   assert.equal(button('boxEditorProblems','崩边').attributes['aria-pressed'],'true','Existing problem is selected without another click');
-  assert.match(el('boxEditorAutomatic').textContent,/按标准自动：生产/);
+  assert.match(el('boxEditorAutomatic').textContent,/默认：生产/);
   assert.equal(el('boxEditorResponsibilitySection').hidden,false);assert.equal(button('boxEditorResponsibilities','生产'),undefined,'Automatic role is text below instead of a leading button');
-  assert.deepEqual(el('boxEditorResponsibilities').children.map(b=>b.textContent),['运输','待核','原材料']);assert.equal(button('boxEditorResponsibilities','运输').disabled,true);
+  assert.deepEqual(el('boxEditorResponsibilities').children.map(b=>b.textContent),['运输','待核','原材料']);assert.equal(button('boxEditorResponsibilities','运输').disabled,false,'Alternative roles must remain clickable for standard problems');
   assert.ok(parseFloat(el('boxEditor').style.left)<=490&&parseFloat(el('boxEditor').style.top)<=252,'Popup stays inside viewport');
   await vm.runInContext('AnnotationUI.saveDraft()',context);
   assert.equal(writes.at(-1).status,'draft');assert.deepEqual(writes.at(-1).boxes[0],human,'Adding a box preserves existing human coordinates and metadata');
   assert.deepEqual(writes.at(-1).boxes[1].responsibilities,['生产']);
+  await button('boxEditorResponsibilities','运输').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.deepEqual(writes.at(-1).boxes[1].responsibilities,['运输'],'First correction replaces the automatic production role instead of adding to it');
+  assert.equal(writes.at(-1).boxes[1].problem,'崩边');assert.equal(writes.at(-1).boxes[1].responsibility_override,true);
+  assert.deepEqual(writes.at(-1).classification_updates.responsibility_overrides,['崩边']);
+  await button('boxEditorResponsibilities','原材料').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.deepEqual(writes.at(-1).boxes[1].responsibilities,['运输','原材料'],'Further explicit human roles support multiple selection');
+  await button('boxEditorResponsibilities','待核').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.deepEqual(writes.at(-1).boxes[1].responsibilities,['待核']);
+  await button('boxEditorResponsibilities','待核').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.deepEqual(writes.at(-1).boxes[1].responsibilities,[],'Clearing explicit choices cannot silently restore an automatic role');
+  assert.equal(await key(' '),true);assert.match(failures.pop().message,/选择责任/);assert.equal(el('boxEditorError').hidden,false);assert.match(el('boxEditorError').textContent,/选择责任/);
+  await el('boxEditorRestoreDefault').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.deepEqual(writes.at(-1).boxes[1].responsibilities,['生产']);assert.equal(writes.at(-1).boxes[1].responsibility_override,true,'Restoring the default is itself an explicit update to the previous human mapping');assert.equal(el('boxEditorError').hidden,true);
+  await button('boxEditorResponsibilities','运输').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.deepEqual(writes.at(-1).boxes[1].responsibilities,['运输'],'The first correction after restoring default also replaces that default');
   await button('boxEditorProblems','划伤').fire('click');
   assert.equal(el('boxEditor').hidden,false);assert.equal(el('boxEditorResponsibilitySection').hidden,false);
   for(const handler of keys)handler({target:context.document.body,key:'Enter',code:'Enter',ctrlKey:false,preventDefault(){},stopImmediatePropagation(){}});
@@ -74,7 +88,7 @@ class Element{
   await el('confirmAnnotation').fire('click');
   assert.equal(navigations,1);const confirmed=writes.at(-1);assert.equal(confirmed.status,'confirmed');
   assert.equal(confirmed.expected_classification_draft,'visible-draft','Confirm binds the visible classification draft');
-  assert.deepEqual(confirmed.classification_updates,{defects:['划伤','崩边'],responsibilities:['运输','生产'],problem_responsibilities:{划伤:['运输'],崩边:['生产']}});
+  assert.deepEqual(confirmed.classification_updates,{defects:['划伤','崩边'],responsibilities:['运输','生产'],problem_responsibilities:{划伤:['运输'],崩边:['生产']},responsibility_overrides:['划伤']});
   assert.equal(context.S.current.has_draft,false);assert.equal(context.S.current.draft_fingerprint,null);
   assert.equal(navigationIndexes.at(-1),1,'An image retained in the current filter advances one position');
   assert.deepEqual(confirmed.boxes[0],human);assert.equal(failures.length,0);
@@ -95,6 +109,76 @@ class Element{
   await key('Escape');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.deepEqual(writes.at(-1).boxes,acceptedBeforeCancel,'Escape restores the edited existing region instead of deleting it');
   assert.equal(vm.runInContext('AnnotationUI.hasWork()',context),true);assert.equal(vm.runInContext('AnnotationUI.isLoading()',context),false);
   assert.equal(failures.length,0);
+  // Reload/default construction must honour a human problem mapping before the automatic rule.
+  context.S.current.label.problem_responsibilities.崩边=['运输'];await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);
+  await draw([.2,.2],[.45,.5],30);await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.deepEqual(writes.at(-1).boxes.at(-1).responsibilities,['运输']);assert.equal(writes.at(-1).boxes.at(-1).responsibility_override,true);
+  await el('boxEditorRestoreDefault').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.deepEqual(writes.at(-1).boxes.at(-1).responsibilities,['生产'],'Explicit current box override has priority over prior image mapping');
+  context.S.current.label.problem_responsibilities.崩边=[];await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);
+  await draw([.2,.2],[.45,.5],31);await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.deepEqual(writes.at(-1).boxes.at(-1).responsibilities,[],'An explicit empty image mapping is not silently replaced by the default');
+  await key('Enter');assert.match(failures.pop().message,/选择责任/);assert.equal(el('boxEditor').hidden,false);
+  assert.equal(failures.length,0);
+  // Conflict recovery mirrors the server: intersection / smaller area >= 0.5.
+  const unit={x:0,y:0,w:1,h:1};assert.equal(geometry.overlapRatio(unit,{x:.5,y:0,w:1,h:1}),.5);assert.ok(geometry.overlapRatio(unit,{x:.51,y:0,w:1,h:1})<.5);
+  context.S.current.label=structuredClone(label);
+  const conflictingBox={id:'current-defect',problem:'崩边',x:.35,y:.3,w:.3,h:.3,origin:'model',responsibilities:['生产']};
+  const firstNegative={id:'deleted-fp-1',x:.35,y:.3,w:.3,h:.3,reason:'false_positive'},secondNegative={id:'deleted-fp-2',x:.36,y:.31,w:.28,h:.28,reason:'false_positive'},unrelatedNegative={id:'keep-normal-away',x:.8,y:.75,w:.08,h:.08,reason:'normal_structure'};
+  fixtureBoxes=[structuredClone(human),structuredClone(conflictingBox)];fixtureRegions=[firstNegative,secondNegative,unrelatedNegative];
+  await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);const conflictWrites=writes.length,conflictNavigations=navigations;
+  await el('confirmAnnotation').fire('click');assert.match(failures.pop().message,/2 处已删除误报区域/);assert.equal(writes.length,conflictWrites,'Conflict is explained before any confirm API or implicit candidate adoption');assert.equal(navigations,conflictNavigations);
+  assert.equal(el('boxSelect').value,conflictingBox.id);assert.equal(el('boxEditorConflictActions').hidden,false);assert.match(el('boxEditorError').textContent,/已删除误报区域/);assert.equal(el('boxEditorKeepNormal').textContent,'保留误报判定');
+  assert.ok(el('annotationOverlay').children.some(node=>node.fill==='#ffbd69'&&node['fill-opacity']===.32),'Conflicting negative regions get a visible orange fill');
+  await el('boxEditorKeepProblem').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.deepEqual(writes.at(-1).boxes,fixtureBoxes);assert.deepEqual(writes.at(-1).negative_regions,[unrelatedNegative],'Keep problem removes all negatives conflicting with this one problem, preserving unrelated regions');
+  await el('undoBox').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.deepEqual(writes.at(-1).negative_regions,fixtureRegions,'Conflict decisions are undoable including every removed ROI');
+  await el('confirmAnnotation').fire('click');failures.pop();await el('boxEditorKeepNormal').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.deepEqual(writes.at(-1).boxes,[human]);assert.deepEqual(writes.at(-1).negative_regions,fixtureRegions);assert.deepEqual(context.S.current.label,label,'Removing a conflicting box never deletes image classification');
+  await el('undoBox').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.deepEqual(writes.at(-1).boxes,fixtureBoxes);
+
+  // A pending model box overlapping a known-normal ROI remains pending until explicit resolution.
+  const proposalBox={id:'machine-pending',problem:'崩边',x:.4,y:.3,w:.2,h:.25,origin:'model',score:.7};
+  fixtureBoxes=[structuredClone(human)];fixtureRegions=[{id:'known-hole',x:.4,y:.3,w:.2,h:.25,reason:'process_hole'},unrelatedNegative];fixtureProposal={proposal_id:'conflict-proposal',model_id:'test',method:'test',status:'pending',source_sha256:'source',label_fingerprint:'old-label',boxes:[proposalBox]};
+  await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);const pendingWrites=writes.length;
+  await el('confirmAnnotation').fire('click');assert.match(failures.pop().message,/工艺孔/);assert.equal(writes.length,pendingWrites);assert.equal(el('boxSelect').value,'suggestion:machine-pending');
+  await el('adoptAutoBoxes').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.equal(writes.length,pendingWrites,'Keep-all does not silently adopt conflicting machine suggestions');
+  await el('boxEditorKeepProblem').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.deepEqual(writes.at(-1).boxes,[human],'Resolving normal feedback does not yet accept a machine candidate');assert.deepEqual(writes.at(-1).negative_regions,[unrelatedNegative]);
+  await el('confirmAnnotation').fire('click');assert.equal(writes.at(-1).status,'confirmed');assert.equal(writes.at(-1).boxes.length,2);assert.deepEqual(writes.at(-1).boxes[0],human);
+
+  // Removing a duplicate machine rectangle does not turn the remaining positive region into a negative ROI.
+  const duplicateHuman={...human,id:'human-overlap',x:.4,y:.3,w:.2,h:.25};
+  fixtureBoxes=[duplicateHuman];fixtureRegions=[];fixtureProposalId=null;context.S.current.label=structuredClone(label);
+  await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);
+  await clickPoint(.5,.425,40);await el('deleteBox').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.deepEqual(writes.at(-1).boxes,[duplicateHuman]);assert.equal(writes.at(-1).negative_regions.length,0,'Ordinary duplicate deletion records proposal removal without negative ROI');
+  await el('undoBox').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.deepEqual(writes.at(-1).boxes,[duplicateHuman]);
+  await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);await el('rejectAutoBoxes').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.deepEqual(writes.at(-1).boxes,[duplicateHuman]);assert.equal(writes.at(-1).negative_regions.length,0,'Reject-all must protect overlapping human positives');
+  await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);await clickPoint(.5,.425,41);await el('processHoleBox').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.equal(writes.at(-1).negative_regions[0].reason,'process_hole','An explicit process-hole correction is retained even when a human positive overlaps it');
+  await el('confirmAnnotation').fire('click');assert.match(failures.pop().message,/工艺孔/);assert.equal(el('boxEditorConflictActions').hidden,false);
+  assert.equal(failures.length,0);
+  // One conflicting and one unrelated candidate: explicit repair must preserve the second candidate.
+  fixtureBoxes=[structuredClone(human)];fixtureRegions=[{id:'known-hole-2',x:.4,y:.3,w:.2,h:.25,reason:'process_hole'}];
+  const secondCandidate={...proposalBox,id:'machine-unrelated',x:.75,y:.1,w:.1,h:.1};fixtureProposal.boxes=[proposalBox,secondCandidate];
+  await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);
+  await el('confirmAnnotation').fire('click');failures.pop();await el('boxEditorKeepNormal').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.deepEqual(writes.at(-1).boxes.map(box=>box.id),['retained-human','machine-unrelated']);assert.deepEqual(writes.at(-1).negative_regions,fixtureRegions);
+  await el('confirmAnnotation').fire('click');assert.equal(writes.at(-1).status,'confirmed');
+  await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);
+  await el('confirmAnnotation').fire('click');assert.match(failures.pop().message,/工艺孔/);assert.equal(el('boxEditorConflictActions').hidden,false);
+  const moveStart=geometry.screenPoint(.5,.425,view),moveEnd=geometry.screenPoint(.25,.8,view);
+  await el('photoStage').fire('pointerdown',{button:0,clientX:moveStart.x,clientY:moveStart.y,pointerId:50});
+  await el('photoStage').fire('pointermove',{button:0,clientX:moveEnd.x,clientY:moveEnd.y,pointerId:50});
+  await el('photoStage').fire('pointerup',{button:0,clientX:moveEnd.x,clientY:moveEnd.y,pointerId:50});await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.equal(writes.at(-1).boxes.length,3,'Moving the conflicting candidate away retains both candidates for review');assert.ok(Math.abs(writes.at(-1).boxes.find(box=>box.id==='machine-pending').x-.15)<1e-10);
+  await el('confirmAnnotation').fire('click');assert.equal(writes.at(-1).status,'confirmed');
+  await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);await clickPoint(.5,.425,51);await el('deleteBox').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
+  assert.deepEqual(writes.at(-1).boxes.map(box=>box.id),['retained-human','machine-unrelated'],'Explicit Delete of the conflicting candidate can complete while preserving the unrelated one');
+  await el('confirmAnnotation').fire('click');assert.equal(writes.at(-1).status,'confirmed');assert.equal(failures.length,0);
+  console.log('Conflict repair, move and Delete preserve other model candidates and can proceed to confirmation.');
+  console.log('Pre-submit overlap detection, exact conflict highlighting, explicit recovery/undo, pending proposal protection and duplicate-deletion prevention passed.');
+  console.log('Automatic responsibility correction, explicit override payload, later multi-select, empty-choice protection and restore-default passed.');
   console.log('Space continuation, missing-role interception, note-input guard, click-to-edit, opaque labels and Escape snapshot restoration passed.');
   console.log('Right-button first draw, existing-problem default, standard responsibility, shared-problem multi-select, viewport bounds, draft preservation, atomic confirmation and save-failure navigation guard passed.');
 })().catch(error=>{console.error(error);process.exitCode=1;});

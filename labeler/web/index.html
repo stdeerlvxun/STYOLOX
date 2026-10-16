@@ -10,16 +10,15 @@
 </head>
 <body class="workspace-v2">
   <header class="app-header">
-    <div class="title-line"><h1>售后图片分类</h1><span id="sourceNote" class="source-note">直接查看原图 · 标签保存在本机</span><span id="counts" role="status"></span></div>
-    <details id="directorySettings"><summary>目录 / 导入导出</summary><div class="directory-line">
+    <div class="title-line"><h1>售后图片分类</h1><span id="sourceNote" class="source-note">直接查看原图 · 标签保存在本机</span><span id="counts" role="status"></span>
+    <details id="directorySettings"><summary>目录与服务</summary><div class="directory-panel"><div class="directory-line">
       <label for="rootPath">原始目录</label><input id="rootPath" spellcheck="false" aria-label="原始图片目录">
       <button id="openRoot">打开目录</button><button id="rescan">重新扫描</button>
       <button id="toggleImport">导入已有分类</button>
       <select id="exportFormat" aria-label="导出格式"><option value="json">JSON</option><option value="csv">CSV</option></select>
       <button id="export">导出当前筛选</button>
       <a class="text-button" href="/api/annotations/export" download>导出位置补标</a>
-    </div></details>
-    <div id="scanStatus" class="scan-status" role="status">正在连接本机服务…</div>
+    </div><div id="scanStatus" class="scan-status" role="status">正在连接本机服务…</div></div></details></div>
   </header>
   <div class="workspace-guide" aria-label="标注操作说明"><strong>图片上直接标注</strong><span><kbd>右键拖框</kbd> 选择问题与责任</span><span><kbd>空格</kbd> 确认此框，继续标下一处</span><span><kbd>Enter</kbd> 保存整图并下一张</span></div>
   <section id="importPanel" class="import-panel" hidden aria-label="导入已有文件夹分类">
@@ -71,9 +70,9 @@
           <div class="box-editor-heading"><h3 id="boxEditorTitle">当前问题框</h3><button id="boxEditorClose" class="text-button" title="收起面板，保留当前编辑">收起</button></div>
           <div class="box-editor-columns">
             <section class="box-editor-problem-column"><h3>问题点 <span class="small muted">选择当前这一处</span></h3><div id="boxEditorProblems" class="chips box-editor-problems" aria-label="选择问题点"></div></section>
-            <section id="boxEditorResponsibilitySection" class="box-editor-responsibility-column"><h3>责任 <span class="small muted">可多选</span></h3><div id="boxEditorResponsibilities" class="chips compact" aria-label="选择责任"></div><p id="boxEditorResponsibilityHint" class="small muted"></p><p id="boxEditorAutomatic" class="box-editor-automatic small" hidden></p></section>
+            <section id="boxEditorResponsibilitySection" class="box-editor-responsibility-column"><h3>责任 <span class="small muted">可多选</span></h3><div id="boxEditorResponsibilities" class="chips compact" aria-label="选择责任"></div><p id="boxEditorResponsibilityHint" class="small muted"></p><div class="box-editor-automatic-row"><p id="boxEditorAutomatic" class="box-editor-automatic small" hidden></p><button id="boxEditorRestoreDefault" class="text-button" hidden>恢复默认</button></div></section>
           </div>
-          <p id="boxEditorHint" class="small" role="status"></p>
+          <div class="box-editor-feedback"><p id="boxEditorHint" class="small" role="status"></p><p id="boxEditorError" class="box-editor-error" role="status" aria-live="polite" hidden></p><div id="boxEditorConflictActions" class="box-editor-conflict-actions" role="group" aria-label="解决当前问题与正常区域的冲突" hidden><button id="boxEditorKeepProblem" title="保留当前问题框，撤销当前这一处冲突的正常区域标记">保留问题</button><button id="boxEditorKeepNormal" title="保留正常区域标记，移除当前这个问题框">保留正常</button></div></div>
           <div class="box-editor-actions"><span class="small muted"><kbd>Enter</kbd> 保存整图并下一张</span><button id="boxEditorDone" class="primary">继续下一处 <kbd>空格</kbd></button></div>
         </section>
         <div id="imageMessage" class="image-message"><strong>正在索引原始目录</strong><span>找到图片后即可开始，不必等待全部扫描完成。</span></div>

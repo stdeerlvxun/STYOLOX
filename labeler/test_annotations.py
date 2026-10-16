@@ -232,7 +232,7 @@ class LocalizationTest(unittest.TestCase):
         return body
 
     def test_box_flow_appends_standard_responsibility_without_removing_old_classification(self):
-        result=self.store.annotations.save(self.id,self.quick_payload('崩边',['运输']))
+        result=self.store.annotations.save(self.id,self.quick_payload('崩边'))
         self.assertFalse(result['labels_unchanged'])
         self.assertEqual(result['document']['boxes'][0]['responsibilities'],['生产'])
         label=self.store.detail(self.id)['label']
@@ -338,6 +338,128 @@ class LocalizationTest(unittest.TestCase):
         self.assertEqual(self.human(),before)
         self.assertEqual(self.store.query('SELECT * FROM annotation_documents'),[])
         self.assertEqual(self.store.query('SELECT * FROM annotation_history'),[])
+
+    def test_manual_responsibility_override_replaces_old_default_and_keeps_other_issue(self):
+        original={'defects':['崩边','划伤'],'responsibilities':['生产','安装'],
+            'problem_responsibilities':{'崩边':['生产'],'划伤':['安装']},'image_state':'defect','note':'原备注'}
+        self.store.commit([(self.id,original)])
+        body=self.quick_payload('崩边',['运输'])
+        body['boxes'][0]['responsibility_override']=True
+        body['classification_updates']['responsibility_overrides']=['崩边']
+        result=self.store.annotations.save(self.id,body)
+        self.assertEqual(result['document']['boxes'][0]['responsibilities'],['运输'])
+        self.assertTrue(result['document']['boxes'][0]['responsibility_override'])
+        self.assertEqual(result['label']['defects'],['崩边','划伤'])
+        self.assertEqual(result['label']['problem_responsibilities'],{'崩边':['运输'],'划伤':['安装']})
+        self.assertEqual(result['label']['responsibilities'],['运输','安装'])
+        self.assertEqual(result['label']['note'],'原备注')
+        self.assertTrue(self.store.annotations.feedback_export()['items'][0]['training_eligible_by_label_policy'])
+        self.store.undo()
+        self.assertEqual(json.loads(self.store.one('SELECT data FROM labels WHERE image_id=?',(self.id,))['data']),original)
+
+    def test_nonstandard_explicit_box_responsibility_is_not_forced_back_to_rule(self):
+        result=self.store.annotations.save(self.id,self.quick_payload('崩边',['运输']))
+        self.assertEqual(result['document']['boxes'][0]['responsibilities'],['运输'])
+        self.assertEqual(result['label']['problem_responsibilities']['崩边'],['运输'])
+
+    def test_override_aggregates_current_boxes_without_reintroducing_old_default(self):
+        original={**self.label,'defects':['崩边'],'responsibilities':['生产'],
+            'problem_responsibilities':{'崩边':['生产']}}
+        self.store.commit([(self.id,original)])
+        body=self.quick_payload('崩边',['运输']);body['boxes'][0]['responsibility_override']=True
+        body['boxes'].append({'id':'second','problem':'崩边','x':.5,'y':.1,'w':.2,'h':.2,
+            'responsibilities':['安装'],'responsibility_override':True})
+        body['classification_updates']['problem_responsibilities']['崩边']=['运输','安装']
+        body['classification_updates']['responsibility_overrides']=['崩边']
+        result=self.store.annotations.save(self.id,body)
+        self.assertEqual(result['label']['problem_responsibilities']['崩边'],['运输','安装'])
+        self.assertEqual(result['label']['responsibilities'],['运输','安装'])
+
+    def test_override_does_not_remove_role_still_used_by_another_issue(self):
+        original={**self.label,'defects':['崩边','其他破损'],'responsibilities':['生产'],
+            'problem_responsibilities':{'崩边':['生产'],'其他破损':['生产']}}
+        self.store.commit([(self.id,original)])
+        body=self.quick_payload('崩边',['运输']);body['boxes'][0]['responsibility_override']=True
+        result=self.store.annotations.save(self.id,body)
+        self.assertEqual(result['label']['problem_responsibilities']['崩边'],['运输'])
+        self.assertEqual(result['label']['problem_responsibilities']['其他破损'],['生产'])
+        self.assertEqual(result['label']['responsibilities'],['运输','生产'])
+
+    def test_reset_to_default_is_explicit_and_replaces_prior_manual_mapping(self):
+        original={**self.label,'defects':['崩边'],'responsibilities':['运输'],
+            'problem_responsibilities':{'崩边':['运输']}}
+        self.store.commit([(self.id,original)])
+        body=self.quick_payload('崩边',['生产']);body['boxes'][0]['responsibility_override']=True
+        result=self.store.annotations.save(self.id,body)
+        self.assertEqual(result['label']['problem_responsibilities']['崩边'],['生产'])
+        self.assertEqual(result['label']['responsibilities'],['生产'])
+        self.assertEqual(result['document']['classification_updates']['responsibility_overrides'],['崩边'])
+
+    def test_override_empty_can_be_drafted_but_cannot_confirm_or_train(self):
+        body=self.quick_payload('崩边',[]);body['boxes'][0]['responsibility_override']=True
+        body['classification_updates']['responsibility_overrides']=['崩边'];body['status']='draft'
+        before=self.human();saved=self.store.annotations.save(self.id,body)
+        self.assertEqual(saved['document']['boxes'][0]['responsibilities'],[])
+        self.assertTrue(saved['document']['boxes'][0]['responsibility_override'])
+        self.assertEqual(self.human(),before)
+        self.assertFalse(self.store.annotations.export()['items'][0]['training_eligible_by_label_policy'])
+        body['expected_version']=saved['version'];body['status']='confirmed'
+        with self.assertRaisesRegex(ValueError,'选择责任'):self.store.annotations.save(self.id,body)
+        self.assertEqual(self.human(),before)
+        self.assertEqual(self.store.annotations.detail(self.id)['version'],saved['version'])
+        self.assertEqual(self.store.annotations.feedback_export()['items'],[])
+
+    def test_old_client_omitting_override_flag_preserves_it_and_current_responsibility(self):
+        body=self.quick_payload('崩边',['运输']);body['boxes'][0]['responsibility_override']=True
+        first=self.store.annotations.save(self.id,body)
+        body=self.payload();body['boxes']=first['document']['boxes']
+        del body['boxes'][0]['responsibility_override'];del body['boxes'][0]['responsibilities']
+        before=self.human();second=self.store.annotations.save(self.id,body)
+        self.assertTrue(second['document']['boxes'][0]['responsibility_override'])
+        self.assertEqual(second['document']['boxes'][0]['responsibilities'],['运输'])
+        self.assertEqual(self.human(),before)
+
+    def test_invalid_override_contract_is_rejected_atomically(self):
+        variants=[('box_flag','true'),('list','崩边'),('list',['未知问题']),('list',[True])]
+        for field,value in variants:
+            body=self.quick_payload('崩边',['运输'])
+            if field=='box_flag':body['boxes'][0]['responsibility_override']=value
+            else:body['classification_updates']['responsibility_overrides']=value
+            before=self.human()
+            with self.assertRaisesRegex(ValueError,'纠正'):self.store.annotations.save(self.id,body)
+            self.assertEqual(self.human(),before)
+            self.assertEqual(self.store.query('SELECT * FROM annotation_documents'),[])
+
+    def test_explicitly_removing_only_conflicting_regions_allows_confirmation(self):
+        retained=[{'id':'normal-'+str(i),'x':.65+i*.04,'y':.65,'w':.03,'h':.1,
+            'reason':'process_hole' if i%2 else 'false_positive','source_box_id':'removed-'+str(i)}
+            for i in range(6)]
+        conflicting=[{'id':'conflict-1','x':.1,'y':.2,'w':.3,'h':.4,'reason':'false_positive'},
+            {'id':'conflict-2','x':.11,'y':.21,'w':.28,'h':.38,'reason':'false_positive'}]
+        body=self.quick_payload('崩边',['运输']);body['boxes'][0]['responsibility_override']=True
+        body.update(status='draft',negative_regions=conflicting+retained)
+        before=self.human();draft=self.store.annotations.save(self.id,body)
+        self.assertEqual(self.human(),before)
+        self.assertFalse(self.store.annotations.export()['items'][0]['training_eligible_by_label_policy'])
+        body.update(status='confirmed',expected_version=draft['version'])
+        with self.assertRaisesRegex(ValueError,'明显重叠'):self.store.annotations.save(self.id,body)
+        self.assertEqual(self.human(),before)
+        self.assertEqual(self.store.annotations.detail(self.id)['version'],draft['version'])
+        # The UI explicitly keeps the positive and removes just these two conflicting ROIs.
+        body['negative_regions']=retained
+        result=self.store.annotations.save(self.id,body)
+        self.assertEqual(result['document']['negative_regions'],retained)
+        self.assertEqual(len(result['document']['boxes']),1)
+        for field in ('id','problem','x','y','w','h','responsibilities','responsibility_override'):
+            self.assertEqual(result['document']['boxes'][0][field],body['boxes'][0][field])
+        self.assertEqual(result['label']['problem_responsibilities']['其他破损'],['运输'])
+        self.assertEqual(result['label']['problem_responsibilities']['崩边'],['运输'])
+        self.assertEqual(result['label']['note'],'人工原结果')
+        self.assertTrue(self.store.annotations.export()['items'][0]['training_eligible_by_label_policy'])
+        feedback=self.store.annotations.feedback_export()['items']
+        self.assertEqual(len(feedback),1)
+        self.assertEqual(feedback[0]['feedback']['negative_regions'],retained)
+        self.assertTrue(feedback[0]['training_eligible_by_label_policy'])
 
 
 if __name__=='__main__':unittest.main()
