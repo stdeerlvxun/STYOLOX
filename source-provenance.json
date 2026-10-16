@@ -113,7 +113,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "cff99903ecb732f47bb873d1cb36ef55cc2dfbc1",
+    "source_commit": "59c3c2186ea21952db0586c2486522e982d4c04b",
     "files": [
       {
         "path": ".gitignore",
@@ -273,7 +273,7 @@
       },
       {
         "path": "web/style.css",
-        "sha256": "cef7b044700482c2c7f399efa7c74075a507de03f7018c02a088179fb4b8c07c"
+        "sha256": "2d222cc635941cf2fc2e82004fd9aa242261c601c6ff547006c14ecee75a7b9d"
       },
       {
         "path": "启动分类工具.cmd",

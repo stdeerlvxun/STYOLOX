@@ -139,6 +139,7 @@
 .workspace-v2 .box-editor .chips button{height:34px;min-height:34px;padding:3px 5px;font-size:13px;line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;background:#fff;border-color:#b7c4d4;color:#25354b}
 .workspace-v2 .box-editor .chips button:hover:not(:disabled){background:#f1f5fd;border-color:#7794c0}
 .workspace-v2 .box-editor .chips button[aria-pressed="true"]{background:#245bd6;border:2px solid #245bd6;color:#fff;font-weight:650}
+.workspace-v2 .box-editor .chips button[aria-pressed="true"]:hover:not(:disabled),.workspace-v2 .box-editor .chips button[aria-pressed="true"]:active:not(:disabled){background:#174abd;border-color:#174abd;color:#fff}
 .box-editor-responsibility-column{display:flex;flex-direction:column;padding-left:14px;border-left:1px solid #d9e0e8}
 .workspace-v2 #boxEditorResponsibilities{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px;align-content:start}
 .workspace-v2 #boxEditorResponsibilities button{height:34px;min-height:34px;font-size:12px;white-space:normal;overflow-wrap:anywhere}
