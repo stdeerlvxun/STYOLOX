@@ -8,7 +8,7 @@
   <script src="/app.js" defer></script>
   <script src="/annotations.js" defer></script>
 </head>
-<body>
+<body class="workspace-v2">
   <header class="app-header">
     <div class="title-line"><h1>售后图片分类</h1><span id="sourceNote" class="source-note">直接查看原图 · 标签保存在本机</span><span id="counts" role="status"></span></div>
     <details id="directorySettings"><summary>目录 / 导入导出</summary><div class="directory-line">
@@ -21,6 +21,7 @@
     </div></details>
     <div id="scanStatus" class="scan-status" role="status">正在连接本机服务…</div>
   </header>
+  <div class="workspace-guide" aria-label="标注操作说明"><strong>图片上直接标注</strong><span><kbd>右键拖框</kbd> 选择问题与责任</span><span><kbd>空格</kbd> 确认此框，继续标下一处</span><span><kbd>Enter</kbd> 保存整图并下一张</span></div>
   <section id="importPanel" class="import-panel" hidden aria-label="导入已有文件夹分类">
     <label for="manifestPath">批次清单 JSON</label><input id="manifestPath" spellcheck="false">
     <button id="previewImport">预览导入</button><button id="applyImport" hidden>确认导入标签</button>
@@ -67,22 +68,25 @@
         <img id="photo" alt="" draggable="false" hidden>
         <svg id="annotationOverlay" aria-hidden="true" hidden></svg>
         <section id="boxEditor" class="box-editor" role="dialog" aria-label="当前问题框的问题与责任" hidden>
-          <div class="box-editor-heading"><h3>问题点</h3><button id="boxEditorClose" class="text-button" title="收起，编辑内容保留；Esc">收起</button></div>
-          <div id="boxEditorProblems" class="chips box-editor-problems" aria-label="选择问题点"></div>
-          <div id="boxEditorResponsibilitySection"><h3>责任 <span class="small muted">可多选</span></h3><div id="boxEditorResponsibilities" class="chips compact" aria-label="选择责任"></div></div>
+          <div class="box-editor-heading"><h3 id="boxEditorTitle">当前问题框</h3><button id="boxEditorClose" class="text-button" title="收起面板，保留当前编辑">收起</button></div>
+          <div class="box-editor-columns">
+            <section class="box-editor-problem-column"><h3>问题点 <span class="small muted">选择当前这一处</span></h3><div id="boxEditorProblems" class="chips box-editor-problems" aria-label="选择问题点"></div></section>
+            <section id="boxEditorResponsibilitySection" class="box-editor-responsibility-column"><h3>责任 <span class="small muted">可多选</span></h3><div id="boxEditorResponsibilities" class="chips compact" aria-label="选择责任"></div><p id="boxEditorResponsibilityHint" class="small muted"></p><p id="boxEditorAutomatic" class="box-editor-automatic small" hidden></p></section>
+          </div>
           <p id="boxEditorHint" class="small" role="status"></p>
-          <div class="box-editor-actions"><span class="small muted">右键继续框选 · Enter 保存整图</span><button id="boxEditorDone" class="primary">完成此框</button></div>
+          <div class="box-editor-actions"><span class="small muted"><kbd>Enter</kbd> 保存整图并下一张</span><button id="boxEditorDone" class="primary">继续下一处 <kbd>空格</kbd></button></div>
         </section>
         <div id="imageMessage" class="image-message"><strong>正在索引原始目录</strong><span>找到图片后即可开始，不必等待全部扫描完成。</span></div>
         <div id="imageBusy" class="image-busy" hidden>正在读取图片…</div>
         <button id="retryImage" class="retry-image" hidden>重新读取</button>
       </div>
       <div class="file-caption"><span id="fileName">原图不移动、不复制</span><button id="locate" class="text-button" disabled>定位原文件</button></div>
-      <div class="viewer-footer"><span>右键画框 · 左键调整 · 滚轮缩放 · Enter 保存</span><span id="loadHint">按需加载 / 相邻预读</span></div>
+      <div class="viewer-footer"><span>点框修改 · 左键调整 · 滚轮缩放 · Esc 取消当前框</span><span id="loadHint">按需加载 / 相邻预读</span></div>
     </section>
-    <aside class="label-panel" aria-label="图片标签" data-step="1">
+    <aside id="labelPanel" class="label-panel" role="dialog" aria-labelledby="labelPanelTitle" data-step="1" data-panel-view="details" hidden>
+      <div class="label-panel-heading"><h2 id="labelPanelTitle">图片信息与分类</h2><button id="labelPanelClose" class="text-button" aria-label="收起图片信息面板">收起</button></div>
       <div class="label-scroll">
-        <div class="label-heading"><h2 id="workflowTitle">1 · 先找问题点</h2><button id="backToProblems" class="text-button" hidden>返回问题点</button><span id="saveStatus" role="status">未选择图片</span></div>
+        <div class="label-heading"><h2 id="workflowTitle">1 · 先找问题点</h2><button id="backToProblems" class="text-button" hidden>返回问题点</button></div>
         <p class="muted small label-intro">问题点可多选；专属问题自动定责，共性问题再选责任。</p>
         <section id="recommendationPanel" class="recommendation-panel" hidden aria-labelledby="recommendationTitle">
           <h3 id="recommendationTitle">模型建议 · 待确认</h3>
@@ -102,17 +106,21 @@
           <button data-state="normal" aria-pressed="false">确认无可见破损</button><button data-state="unclear" aria-pressed="false">看不清 / 无法判断</button><button data-state="unrelated" aria-pressed="false">非板件 / 无关图片</button>
         </div></section>
         <button id="rejectUnrelated" class="text-button" hidden>模型判错 · 返回问题点分类</button>
-        <section class="label-section"><label for="note"><h3>备注</h3></label><textarea id="note" rows="1" maxlength="4000" placeholder="补充位置、待核原因等"></textarea></section>
+        <section id="labelNoteSection" class="label-section"><label for="note"><h3>备注</h3></label><textarea id="note" rows="1" maxlength="4000" placeholder="补充位置、待核原因等"></textarea></section>
         <details id="contextDetails"><summary>关联售后信息</summary><pre id="caseContext">展开后按需读取售后单信息。</pre></details>
         </div></div>
         <section id="batchPanel" class="batch-panel" hidden><h3>批量追加确认</h3><p id="batchSummary"></p><button id="applyBatch" class="primary">确认追加并标记完成</button><button id="cancelBatch">取消</button></section>
       </div>
       <div class="commit-bar"><button id="commit" class="primary" disabled>保存并下一张 <kbd>Enter</kbd></button>
-        <div><button id="skip">跳过</button><button id="undo">撤销上次确认 <kbd>Ctrl Z</kbd></button></div>
+        <div><button id="skip">跳过</button></div>
         <span class="small muted">勾选后自动暂存，确认后计入“已分类”</span>
       </div>
     </aside>
   </main>
+  <footer class="workspace-actions" aria-label="图片固定操作栏">
+    <div class="workspace-action-tools"><button id="workspacePrevious" title="上一张（左方向键）">上一张</button><button id="undo" title="撤销上次分类确认（Ctrl Z）">撤销确认 <kbd>Ctrl Z</kbd></button><button id="imageStateToggle" aria-controls="labelPanel" aria-expanded="false">图片状态</button><button id="labelPanelToggle" aria-controls="labelPanel" aria-expanded="false">图片信息 / 分类</button></div>
+    <span id="saveStatus" role="status">未选择图片</span><button id="workspaceCommit" class="primary" disabled>保存整图并下一张 <kbd>Enter</kbd></button>
+  </footer>
   <div id="toast" role="status" aria-live="polite" hidden></div>
   <details id="responsibilityMatrix"><summary>问题与责任关联</summary><div class="association-panel"><p class="small">按售后单去重，多选责任可同时计入。关联比例用于提示，已有分类不回填。</p><table><thead><tr><th>问题点</th><th>建议责任</th><th>明确责任单数</th><th>已有人工关联</th></tr></thead><tbody id="responsibilityRows"></tbody></table></div></details>
 </body>

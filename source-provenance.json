@@ -113,7 +113,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "249a73db0aeb57d665d4631de7d48b30fcb9ecda",
+    "source_commit": "cff99903ecb732f47bb873d1cb36ef55cc2dfbc1",
     "files": [
       {
         "path": ".gitignore",
@@ -121,11 +121,11 @@
       },
       {
         "path": "DESIGN.md",
-        "sha256": "b9e9afec2ef475d4643d5294b61f005f0b8de29c02dce72beb9f8e03418f2e38"
+        "sha256": "3b6695d52cfaa3bae98b3f9e415dadf246e91784fc2d455219c78e3cad9b4e30"
       },
       {
         "path": "PRODUCT.md",
-        "sha256": "dc0b3edb033a340f12b794c844950311010e36eb4c22b4846b1e02e54e3678eb"
+        "sha256": "6f9293a4b62e566ab9a286274ad34310cc6a4831f96e2cff189399a75638430f"
       },
       {
         "path": "README.md",
@@ -237,7 +237,7 @@
       },
       {
         "path": "test_box_flow_ui.cjs",
-        "sha256": "d5df54267bebf08894c827599ee8a30b25cb165fb2787b922a602752a99df915"
+        "sha256": "2210fb4776d489cbb0ff239f17f2d05a938ec05cbd3bb605fb33fc52ddf5d1fe"
       },
       {
         "path": "test_box_proposals.py",
@@ -256,20 +256,24 @@
         "sha256": "5afe57db4f27f5f4d191746ef7ce0cf0e85b0a0af237357dd3114103cb6a23e1"
       },
       {
+        "path": "test_workspace_ui.cjs",
+        "sha256": "b75d642fe221fcc50c53040cba6067e1fd083523cf1e062b3b081556bfe5142f"
+      },
+      {
         "path": "web/annotations.js",
-        "sha256": "c881c593b13240f7d4ec03fe9bcc5ce90106594e59654dbf9547607353c8689a"
+        "sha256": "fdf7a0325fa9aa7d7b9944cd87516985aec8110d67a4e953b21888307f375631"
       },
       {
         "path": "web/app.js",
-        "sha256": "f39af37c5c0aa331aeff6bc265d1b4c6f3e652f4434b2b1c381eb4e74ca8a2a3"
+        "sha256": "5116e96357c469e2a1cec2557306deadfe2d88ed33fb5f5f1d05c702af58eb54"
       },
       {
         "path": "web/index.html",
-        "sha256": "c67ed762b9f031cb47764664ffae3d227e7024f1997ddcedc498acfebba9e931"
+        "sha256": "c205245dfc01d2f95a5d86255199a6b222b6b8d8358232e68757b88f79528b1f"
       },
       {
         "path": "web/style.css",
-        "sha256": "a2ffe28164185d4f08b6dddeb6bf44e537d8c6bf050202463887c90495b0b379"
+        "sha256": "cef7b044700482c2c7f399efa7c74075a507de03f7018c02a088179fb4b8c07c"
       },
       {
         "path": "启动分类工具.cmd",

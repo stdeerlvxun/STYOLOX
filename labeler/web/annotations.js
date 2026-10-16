@@ -35,39 +35,74 @@
   function suggestionBoxes(){return proposalCurrent()&&A.proposal.status==='pending'&&!proposalAdopted()?A.proposal.boxes.map(box=>({...box,id:'suggestion:'+box.id,source_box_id:box.id,suggestion:true})):[];}
   function displayBoxes(){return [...A.boxes,...suggestionBoxes()];}
   function selectedBox(){return displayBoxes().find(box=>box.id===A.selected);}
-  function problemOrder(){return [...new Set([...(S.current?.label?.defects||[]),...(S.tags.defect||[])])];}
+  function problemOrder(){return [...new Set([...(S.tags.defect||[]),...(S.current?.label?.defects||[])])];}
   function defaultProblem(){const existing=S.current?.label?.defects||[];return [selectedBox()?.problem,existing.includes(S.responsibilityProblem)?S.responsibilityProblem:'',existing.includes(A.lastProblem)?A.lastProblem:'',...existing,A.lastProblem,el('boxProblem').value,...problemOrder()].find(name=>problemOrder().includes(name))||'';}
   function standardResponsibilities(problem,box){
     if(S.rules?.[problem])return [S.rules[problem]];
-    return [...(box?.responsibilities||S.current?.label?.problem_responsibilities?.[problem]||[])];
+    const label=S.current?.label;return [...(box?.responsibilities||label?.problem_responsibilities?.[problem]||(label?.defects?.length===1&&label.defects[0]===problem?label.responsibilities:[])||[])];
   }
   function updatesForBoxes(boxes){
     const mapping={};for(const box of boxes)if(Object.hasOwn(box,'responsibilities'))mapping[box.problem]=[...new Set([...(mapping[box.problem]||[]),...box.responsibilities])];
     const defects=Object.keys(mapping);return defects.length?{defects,responsibilities:[...new Set(Object.values(mapping).flat())],problem_responsibilities:mapping}:null;
   }
+  function annotationSnapshot(){return {boxes:structuredClone(A.boxes),negativeRegions:structuredClone(A.negativeRegions),outcome:A.outcome,proposalId:A.proposalId,selected:A.selected};}
   function closePopup(){A.popup=null;el('boxEditor').hidden=true;}
+  function popupBox(){return displayBoxes().find(box=>box.id===A.popup?.boxId);}
+  function cancelPopup(){
+    const popup=A.popup;if(!popup)return;
+    closePopup();
+    if(popup.changed){Object.assign(A,structuredClone(popup.before));A.undo.length=Math.min(A.undo.length,popup.undoLength);A.dirty=true;A.revision++;A.saveError='';clearTimeout(A.timer);A.timer=setTimeout(()=>save().catch(fail),500);}
+    render();
+  }
   function popupPosition(){
-    if(!A.popup)return;const editor=el('boxEditor'),width=editor.offsetWidth||342,height=editor.offsetHeight||360;
+    if(!A.popup)return;const editor=el('boxEditor'),width=editor.offsetWidth||540,height=editor.offsetHeight||440;
     const screenWidth=window.innerWidth||document.documentElement?.clientWidth||1280,screenHeight=window.innerHeight||document.documentElement?.clientHeight||720;
-    editor.style.left=Math.max(8,Math.min(A.popup.x+10,screenWidth-width-8))+'px';
-    editor.style.top=Math.max(8,Math.min(A.popup.y+10,screenHeight-height-8))+'px';
+    const stageRect=stage.getBoundingClientRect(),withinPhoto=stage.clientHeight>=height+16;
+    const top=withinPhoto?Math.max(8,stageRect.top+8):8;
+    const bottom=withinPhoto?Math.min(screenHeight-8,stageRect.top+stage.clientHeight-8):screenHeight-8;
+    const left=stage.clientWidth>=width+16?Math.max(8,stageRect.left+8):8;
+    let x=A.popup.x+12,y=A.popup.y+12;
+    if(x+width>screenWidth-8)x=A.popup.x-width-12;
+    editor.style.left=Math.max(left,Math.min(x,screenWidth-width-8))+'px';
+    editor.style.top=Math.max(top,Math.min(y,bottom-height))+'px';
+  }
+  function editPopup(action){
+    if(!A.popup)return;A.popup.changed=true;
+    change(()=>{const box=A.boxes.find(b=>b.id===A.selected);if(box){A.popup.boxId=box.id;action(box);}},true);
   }
   function renderPopup(){
-    const editor=el('boxEditor'),box=A.boxes.find(b=>b.id===A.popup?.boxId);editor.hidden=!box;if(!box){A.popup=null;return;}
+    const editor=el('boxEditor'),box=popupBox();editor.hidden=!box;if(!box){A.popup=null;return;}
+    const automatic=S.rules?.[box.problem],roles=standardResponsibilities(box.problem,box);
+    if(el('boxEditorTitle'))el('boxEditorTitle').textContent=box.suggestion?'纠正机器框':'标注问题位置';
     el('boxEditorProblems').replaceChildren();
-    for(const name of problemOrder()){const button=document.createElement('button');button.type='button';button.textContent=name;button.setAttribute('aria-pressed',String(name===box.problem));button.addEventListener('click',()=>{
-      change(()=>{box.problem=name;box.responsibilities=standardResponsibilities(name);A.lastProblem=name;});
-      if(S.rules?.[name])closePopup();
-    });el('boxEditorProblems').append(button);}
-    const automatic=S.rules?.[box.problem];el('boxEditorResponsibilitySection').hidden=!!automatic;
-    el('boxEditorHint').textContent=automatic?'按标准定责：'+automatic+'；可继续右键画框，Enter 保存整图。':'请为“'+box.problem+'”选择责任，可多选；不确定选待核。';
+    for(const name of problemOrder()){const button=document.createElement('button');button.type='button';button.textContent=name;button.setAttribute('aria-pressed',String(name===box.problem));button.classList.toggle('existing-problem',(S.current?.label?.defects||[]).includes(name));button.addEventListener('click',()=>editPopup(current=>{
+      current.problem=name;current.responsibilities=standardResponsibilities(name);A.lastProblem=name;
+    }));el('boxEditorProblems').append(button);}
+    el('boxEditorResponsibilitySection').hidden=false;
+    el('boxEditorHint').textContent='空格确认此框并继续标下一处 · Enter 保存整张并下一张';
+    if(el('boxEditorAutomatic')){el('boxEditorAutomatic').hidden=!automatic;el('boxEditorAutomatic').textContent=automatic?'按标准自动：'+automatic:'';}
+    if(el('boxEditorResponsibilityHint'))el('boxEditorResponsibilityHint').textContent=automatic?'此问题按标准定责；其他责任仅供查看。':'可多选，不确定选待核。';
     el('boxEditorResponsibilities').replaceChildren();
-    for(const name of [...new Set([...(S.tags.responsibility||[]),'待核'])]){const button=document.createElement('button');button.type='button';button.textContent=name;button.setAttribute('aria-pressed',String(box.responsibilities?.includes(name)));button.addEventListener('click',()=>change(()=>{
-      let values=[...(box.responsibilities||[])];values=values.includes(name)?values.filter(v=>v!==name):name==='待核'?['待核']:[...values.filter(v=>v!=='待核'),name];box.responsibilities=values;
-    }));el('boxEditorResponsibilities').append(button);}
-    el('boxEditorDone').disabled=!box.problem||!box.responsibilities?.length||S.busy;popupPosition();
+    const available=[...new Set([...(S.tags.responsibility||[]),'待核'])],priority=['运输','安装','其他','待核'],later=['生产','原材料'];
+    const roleOrder=[...priority.filter(name=>available.includes(name)),...available.filter(name=>!priority.includes(name)&&!later.includes(name)),...available.filter(name=>later.includes(name))];
+    for(const name of roleOrder.filter(name=>name!==automatic)){const button=document.createElement('button');button.type='button';button.textContent=name;button.disabled=!!automatic;button.setAttribute('aria-pressed',String(roles.includes(name)));button.addEventListener('click',()=>{if(automatic)return;editPopup(current=>{
+      let values=standardResponsibilities(current.problem,current);values=values.includes(name)?values.filter(v=>v!==name):name==='待核'?['待核']:[...values.filter(v=>v!=='待核'),name];current.responsibilities=values;
+    });});el('boxEditorResponsibilities').append(button);}
+    // Keep the action reachable so missing responsibility can produce a useful inline error.
+    el('boxEditorDone').disabled=S.busy;popupPosition();
   }
-  function openPopup(box,x,y){A.popup={boxId:box.id,x,y};renderPopup();}
+  function openPopup(box,x,y,before=null){if(!box)return;A.popup={boxId:box.id,x,y,before:before||annotationSnapshot(),undoLength:A.undo.length-(before?1:0),changed:!!before};renderPopup();}
+  function confirmCurrentBox(){
+    const box=popupBox();if(!box)return true;
+    const roles=standardResponsibilities(box.problem,box);
+    if(!box.problem||!roles.length)throw new Error('请先为“'+(box.problem||'当前问题')+'”选择责任，拿不准可选待核');
+    if(box.suggestion||!Object.hasOwn(box,'responsibilities')||JSON.stringify(box.responsibilities)!==JSON.stringify(roles))editPopup(current=>{current.responsibilities=roles;});
+    A.lastProblem=box.problem;closePopup();return true;
+  }
+  function continueBox(){
+    if(!ready()||S.busy)return false;
+    confirmCurrentBox();A.active=true;A.quickFlow=true;A.draw=true;A.selected='';render();toast('继续框选下一处；Enter 保存整张图片');return true;
+  }
   function adoptSuggestions(){
     const suggestions=suggestionBoxes();if(!suggestions.length)return;
     A.proposalId=A.proposal.proposal_id;
@@ -78,6 +113,13 @@
   }
   async function refreshFeedback(){
     try{A.feedback=await api('/api/annotation-feedback/state');render();}catch{/* A feedback counter must not block reviewing images. */}
+  }
+  function overlayLabel(svg,x,y,text,color='#17212e'){
+    const size=12/S.zoom,padding=4/S.zoom,height=20/S.zoom;
+    const width=Array.from(text).reduce((sum,char)=>sum+(/[\u0000-\u00ff]/.test(char)?.62:1)*size,0)+padding*2;
+    const top=Math.max(0,y-height-3/S.zoom);
+    svg.append(svgNode('rect',{x,y:top,width,height,rx:3/S.zoom,fill:color,'fill-opacity':1,stroke:'#ffffff','stroke-width':.7/S.zoom}));
+    const label=svgNode('text',{x:x+padding,y:top+height/2,fill:'#ffffff','font-size':size,'font-family':'Microsoft YaHei, sans-serif','dominant-baseline':'central'});label.textContent=text;svg.append(label);
   }
   function renderOverlay(){
     const svg=el('annotationOverlay'),v=view();svg.replaceChildren();
@@ -90,8 +132,7 @@
     if(A.drag?.kind==='draw')boxes.push({...A.drag.box,id:'preview',problem:el('boxProblem').value});
     for(const region of A.negativeRegions){const x=rect.x+region.x*rect.width,y=rect.y+region.y*rect.height;
       svg.append(svgNode('rect',{x,y,width:region.w*rect.width,height:region.h*rect.height,fill:'none',stroke:'#ffbd69','stroke-width':2,'stroke-dasharray':'2 5','vector-effect':'non-scaling-stroke'}));
-      const text=svgNode('text',{x:x+3,y:Math.max(14,y-5),fill:'#ffdaa9',stroke:'#17212e','stroke-width':3/S.zoom,'paint-order':'stroke','font-size':12/S.zoom});
-      text.textContent=region.reason==='process_hole'?'工艺孔 · 非破损':region.reason==='normal_structure'?'正常结构 · 非破损':'误报已移除';svg.append(text);}
+      overlayLabel(svg,x,y,region.reason==='process_hole'?'工艺孔 · 非破损':region.reason==='normal_structure'?'正常结构 · 非破损':'误报已移除');}
     for(const [index,box] of boxes.entries()){
       const x=rect.x+box.x*rect.width,y=rect.y+box.y*rect.height,selected=box.id===A.selected||box.id==='preview';
       const color=selected?'#ff453a':box.suggestion?'#d58aff':'#00e6a0';
@@ -101,10 +142,7 @@
       svg.append(svgNode('rect',{x,y,width:box.w*rect.width,height:box.h*rect.height,fill:color,
         'fill-opacity':selected?.22:.12,stroke:color,'stroke-width':selected?3.5:2.5,
         'stroke-dasharray':box.suggestion?'6 4':'none','vector-effect':'non-scaling-stroke'}));
-      const text=svgNode('text',{x:x+3,y:Math.max(14,y-5),fill:'#ffffff',stroke:'#17212e','stroke-width':3,
-        'paint-order':'stroke','font-size':12/S.zoom,'font-family':'Microsoft YaHei, sans-serif'});
-      text.setAttribute('stroke-width',3/S.zoom);
-      text.textContent=(box.suggestion?'机器建议':(index+1))+' · '+box.problem;svg.append(text);
+      const roles=standardResponsibilities(box.problem,box);overlayLabel(svg,x,y,(box.suggestion?'机器建议':(index+1))+' · '+box.problem+(roles.length?' · '+roles.join('、'):''));
       if(selected&&box.id!=='preview'){
         const size=9/v.zoom;for(const [cx,cy]of [[x,y],[x+box.w*rect.width,y],[x,y+box.h*rect.height],[x+box.w*rect.width,y+box.h*rect.height]])
           svg.append(svgNode('rect',{x:cx-size/2,y:cy-size/2,width:size,height:size,fill:color,stroke:'#ffffff','stroke-width':1.5/v.zoom}));
@@ -180,9 +218,11 @@
   }
   async function confirm(){
     if(!ready()||S.busy||S.navigating)return;
+    if(A.drag)throw new Error('请先松开鼠标完成当前框选，再保存整张图片');
+    confirmCurrentBox();
     if(A.outcome==='boxed'&&suggestionBoxes().length)change(()=>{},true);
     if(A.outcome==='boxed'&&!A.boxes.length&&A.negativeRegions.length)A.outcome='needs_correction';
-    if(A.outcome==='boxed'&&!A.boxes.length)throw new Error('尚未框选问题位置；只复核分类请使用右侧“保存分类并完成复核”，或先选择其他复核结果。');
+    if(A.outcome==='boxed'&&!A.boxes.length)throw new Error('尚未框选问题位置；只复核分类请使用底部“图片状态 / 分类”，或先选择其他复核结果。');
     const incomplete=A.boxes.find(box=>Object.hasOwn(box,'responsibilities')&&!box.responsibilities.length);
     if(incomplete){A.selected=incomplete.id;openPopup(incomplete,stage.getBoundingClientRect().left+20,stage.getBoundingClientRect().top+20);throw new Error('请先为“'+incomplete.problem+'”选择责任，拿不准可选待核');}
     const completedId=A.id,completedIndex=S.index;S.busy=true;renderTags();render();
@@ -192,12 +232,12 @@
       await reload({index:Math.min(next,Math.max(0,remaining.total-1))});toast('审核已保存；已有分类保留，新增问题与责任已追加');}
     finally{S.busy=false;renderTags();render();}
   }
-  function undo(){if(!ready()||S.busy||!A.undo.length)return;const previous=A.undo.pop();A.boxes=previous.boxes;A.negativeRegions=previous.negativeRegions;A.outcome=previous.outcome;A.proposalId=previous.proposalId;A.selected=previous.selected;A.dirty=true;A.revision++;render();clearTimeout(A.timer);A.timer=setTimeout(()=>save().catch(fail),500);}
+  function undo(){if(!ready()||S.busy||!A.undo.length)return;closePopup();const previous=A.undo.pop();A.boxes=previous.boxes;A.negativeRegions=previous.negativeRegions;A.outcome=previous.outcome;A.proposalId=previous.proposalId;A.selected=previous.selected;A.dirty=true;A.revision++;render();clearTimeout(A.timer);A.timer=setTimeout(()=>save().catch(fail),500);}
   el('toggleAnnotations').addEventListener('click',()=>{(async()=>{await save();if(A.quickFlow){A.quickFlow=false;A.active=true;}else A.active=!A.active;if(A.active&&S.current&&!A.source)await loadForImage(S.current);else render();})().catch(fail);});
   el('drawBox').addEventListener('click',()=>{A.draw=!A.draw;A.selected='';render();});
-  el('editBoxDetails').addEventListener('click',()=>{const box=selectedBox();if(!box)return;change(()=>{const existing=A.boxes.find(b=>b.id===A.selected);existing.responsibilities=standardResponsibilities(existing.problem,existing);},true);const edited=selectedBox(),rect=stage.getBoundingClientRect();openPopup(edited,rect.left+20,rect.top+20);});
-  el('boxEditorDone').addEventListener('click',()=>{if(!el('boxEditorDone').disabled)closePopup();});
-  el('boxEditorClose').addEventListener('click',closePopup);
+  el('editBoxDetails').addEventListener('click',()=>{const box=selectedBox();if(!box)return;const rect=stage.getBoundingClientRect();openPopup(box,rect.left+20,rect.top+20);});
+  el('boxEditorDone').addEventListener('click',()=>{try{continueBox();}catch(error){fail(error);}});
+  el('boxEditorClose').addEventListener('click',()=>{try{confirmCurrentBox();A.draw=false;render();}catch(error){fail(error);}});
   el('boxSelect').addEventListener('change',()=>{A.selected=el('boxSelect').value;A.draw=false;const box=selectedBox();if(box)el('boxProblem').value=box.problem;render();});
   function markNegative(box,reason){
     A.negativeRegions.push({id:clientId(),x:box.x,y:box.y,w:box.w,h:box.h,reason,...(box.source_box_id||box.origin==='model'?{source_box_id:box.source_box_id||box.id}:{})});
@@ -243,9 +283,10 @@
     const right=event.button===2;
     if((!A.active&&!right)||!ready()||S.busy||el('photo').hidden||event.target.closest('button')||event.target.closest('#boxEditor')||(event.button!==undefined&&event.button!==0&&!right))return;
     if(A.drag){consume(event);return;}
-    if(right){if(!A.active)A.quickFlow=true;A.active=true;A.draw=false;closePopup();}
+    if(A.popup){try{confirmCurrentBox();}catch(error){consume(event);fail(error);return;}}
+    if(right){if(!A.active)A.quickFlow=true;A.active=true;A.draw=false;}
     const point=pointer(event),selected=selectedBox(),corner=selected&&!A.draw?cornerHit(event,selected):-1;
-    if((A.draw||right)&&point.inside)A.drag={kind:'draw',start:point,box:{x:point.x,y:point.y,w:0,h:0},popup:right,problem:defaultProblem()};
+    if((A.draw||right)&&point.inside)A.drag={kind:'draw',start:point,box:{x:point.x,y:point.y,w:0,h:0},popup:true,problem:defaultProblem(),before:annotationSnapshot()};
     else if(corner>=0)A.drag={kind:'resize',start:point,original:structuredClone(selected),corner,box:structuredClone(selected)};
     else if(!A.draw&&point.inside){
       const box=displayBoxes().reverse().find(b=>point.x>=b.x&&point.x<=b.x+b.w&&point.y>=b.y&&point.y<=b.y+b.h);
@@ -264,11 +305,11 @@
   stage.addEventListener('pointerup',event=>{
     if(!A.drag||A.drag.pointerId!==event.pointerId)return;consume(event);const drag=A.drag,box=drag.box;A.drag=null;stage.releasePointerCapture?.(event.pointerId);
     const rect=imageRect(view());if(box.w*rect.width*S.zoom<4||box.h*rect.height*S.zoom<4){renderOverlay();toast('框太小，请放大图片后重新框选');return;}
-    if(drag.kind!=='draw'&&['x','y','w','h'].every(key=>Math.abs(box[key]-drag.original[key])<1e-8)){render();return;}
+    if(drag.kind!=='draw'&&['x','y','w','h'].every(key=>Math.abs(box[key]-drag.original[key])<1e-8)){openPopup(selectedBox(),event.clientX,event.clientY);render();return;}
     change(()=>{if(drag.kind==='draw'){const id=clientId(),problem=drag.popup?drag.problem:el('boxProblem').value;A.boxes.push({...box,id,problem,origin:'human',...(drag.popup?{responsibilities:standardResponsibilities(problem)}:{})});A.selected=id;A.lastProblem=problem;}
       else{const existing=A.boxes.find(b=>b.id===drag.original.id||drag.original.suggestion&&b.source_box_id===drag.original.source_box_id);if(existing){Object.assign(existing,{x:box.x,y:box.y,w:box.w,h:box.h});A.selected=existing.id;}}
       A.outcome='boxed';},true);
-    if(drag.popup){A.draw=false;openPopup(selectedBox(),event.clientX,event.clientY);}
+    if(drag.popup){A.draw=false;openPopup(selectedBox(),event.clientX,event.clientY,drag.before);}
   },true);
   function cancelDrag(){const pointerId=A.drag?.pointerId;A.drag=null;if(pointerId!==undefined&&stage.hasPointerCapture?.(pointerId))stage.releasePointerCapture(pointerId);renderOverlay();}
   stage.addEventListener('pointercancel',event=>{if(A.drag?.pointerId===event.pointerId)cancelDrag();},true);
@@ -276,15 +317,17 @@
   window.addEventListener('blur',cancelDrag);
   el('photo').addEventListener('load',render);window.addEventListener('resize',()=>{renderOverlay();popupPosition();});
   document.addEventListener('keydown',event=>{
-    if(!A.active||event.target.matches('input,textarea,select,[contenteditable=true]'))return;
+    if(!A.active||event.target.matches('input,textarea,select,[contenteditable=true]')||event.target.closest('#labelPanel'))return;
+    if(event.key==='Escape'&&el('labelPanel')&&!el('labelPanel').hidden)return;
     if(A.popup&&!event.ctrlKey&&!event.altKey&&(event.code?.startsWith('Digit')||event.code?.startsWith('Numpad'))){event.preventDefault();event.stopImmediatePropagation();return;}
     if(event.ctrlKey&&event.key.toLowerCase()==='z'){event.preventDefault();event.stopImmediatePropagation();undo();}
     else if(event.key==='Delete'&&A.selected){event.preventDefault();event.stopImmediatePropagation();removeSelected();}
-    else if(event.key==='Enter'&&(A.popup||!event.target.closest('button')||event.target.closest('button').id==='confirmAnnotation')){
-      event.preventDefault();event.stopImmediatePropagation();confirm().catch(fail);
-    }else if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();closePopup();A.draw=false;cancelDrag();render();}
+    else if((event.key===' '||event.code==='Space')&&(A.popup||A.draw)){event.preventDefault();event.stopImmediatePropagation();if(!event.repeat)try{continueBox();}catch(error){fail(error);}}
+    else if(event.key==='Enter'&&(A.popup||!event.target.closest('button')||['confirmAnnotation','workspaceCommit'].includes(event.target.closest('button').id))){
+      event.preventDefault();event.stopImmediatePropagation();(global.submitWorkspace?global.submitWorkspace():confirm()).catch(fail);
+    }else if(event.key==='Escape'){event.preventDefault();event.stopImmediatePropagation();cancelPopup();A.draw=false;cancelDrag();render();}
   },true);
   window.addEventListener('beforeunload',event=>{if(A.dirty){event.preventDefault();event.returnValue='';}});
-  global.AnnotationUI={saveDraft:()=>save(),loadForImage,renderOverlay,refresh:()=>{if(A.active)render();},
+  global.AnnotationUI={submitImage:confirm,continueBox,hasWork:()=>A.id===S.current?.id&&(A.boxes.length>0||A.negativeRegions.length>0||suggestionBoxes().length>0||!!A.popup||!!A.drag),isReady:()=>ready(),isLoading:()=>!!S.current&&(A.id!==S.current.id||A.loading||!!A.error||A.readOnly||!A.source),hideEditor:closePopup,saveDraft:()=>save(),loadForImage,renderOverlay,refresh:()=>{if(A.active)render();},
     empty(){closePopup();A.id=null;A.source=null;A.boxes=[];A.negativeRegions=[];A.documentStatus=null;A.review=null;A.proposal=null;A.proposalId=null;A.loading=false;render();}};
 })(globalThis);

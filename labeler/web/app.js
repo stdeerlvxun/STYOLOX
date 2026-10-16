@@ -133,6 +133,28 @@ function renderWorkflow(){
   $('reviewActions').hidden=!S.reviewEnabled||$('statusFilter').value!=='model_unrelated';
   $('rejectUnrelated').hidden=!S.current?.model_unrelated||S.current?.classified||S.current?.has_draft;
   $('rejectUnrelated').disabled=S.busy||S.navigating||S.dirty;
+  if($('workspaceCommit'))$('workspaceCommit').disabled=!S.current||S.busy||S.navigating;
+  if($('workspacePrevious'))$('workspacePrevious').disabled=!S.current||S.index<=0||S.busy||S.navigating;
+  for(const id of ['imageStateToggle','labelPanelToggle'])if($(id))$(id).disabled=!S.current||S.busy||S.navigating;
+}
+function setLabelPanel(view=null){
+  const panel=$('labelPanel');if(!panel)return;
+  panel.hidden=!view;
+  if(view){panel.dataset.panelView=view;$('labelPanelTitle').textContent=view==='state'?'图片状态与备注':'图片信息 / 分类';globalThis.AnnotationUI?.hideEditor?.();}
+  $('imageStateToggle').setAttribute('aria-expanded',String(view==='state'));
+  $('labelPanelToggle').setAttribute('aria-expanded',String(view==='details'));
+}
+async function submitWorkspace(){
+  if(!S.current||S.busy||S.navigating)return;
+  if(globalThis.AnnotationUI?.isLoading?.())throw new Error('正在读取当前图片的补标，请稍后再保存');
+  const label=S.current.label;
+  if(['','defect'].includes(label.image_state)&&globalThis.AnnotationUI?.hasWork()){
+    await globalThis.AnnotationUI.submitImage();return;
+  }
+  if(!label.defects.length&&!label.image_state){setLabelPanel('state');throw new Error('请先框选问题位置，或选择图片状态');}
+  const pending=label.problem_responsibilities?label.defects.filter(problem=>!label.problem_responsibilities[problem]?.length):[];
+  if(pending.length){S.labelStep=2;S.responsibilityProblem=pending[0];setLabelPanel('details');renderTags();throw new Error('请先为“'+pending[0]+'”选择责任，拿不准可选待核');}
+  S.labelStep=2;await commit();
 }
 function buttonTag(name,active,action){
   const button=document.createElement('button');button.type='button';button.textContent=name;button.setAttribute('aria-pressed',String(active));button.addEventListener('click',action);return button;
@@ -355,6 +377,7 @@ async function selectIndex(index,{internal=false}={}){
   const detail=await api('/api/item?id='+item.id);if(nav!==S.nav||view!==S.view)return;
   S.current=detail;S.recommendation=null;S.recommendationPage=0;S.responsibilityProblem='';S.labelStep=1;S.responsibilityEdit.clear();S.index=index;S.dirty=false;S.revision++;S.original=false;
   document.body.classList.remove('library-open');
+  setLabelPanel();
   $('note').value=detail.label.note;saveIndicator(detail.has_draft?'已恢复暂存':detail.classified?'已分类':'尚未分类',detail.has_draft||detail.classified?'saved':'');
   $('position').textContent=(index+1)+' / '+S.total;$('fileName').textContent=detail.relative_path;$('fileName').title=detail.full_path;
   $('commit').disabled=false;$('locate').disabled=false;$('contextDetails').open=false;
@@ -455,6 +478,11 @@ for(const button of $('imageStates').children)button.addEventListener('click',()
 for(const [id,group]of [['addDefect','defect'],['addResponsibility','responsibility']])on(id,'submit',async e=>{e.preventDefault();const input=$(id).elements.name;S.tags=await api('/api/tag',{group,name:input.value});input.value='';renderTags();});
 on('previous','click',()=>selectIndex(S.index-1));on('next','click',()=>selectIndex(S.index+1));on('skip','click',()=>selectIndex(S.index+1));on('commit','click',commit);
 on('showLibrary','click',()=>document.body.classList.toggle('library-open'));
+on('workspacePrevious','click',()=>selectIndex(S.index-1));
+on('workspaceCommit','click',submitWorkspace);
+on('imageStateToggle','click',()=>setLabelPanel(!$('labelPanel').hidden&&$('labelPanel').dataset.panelView==='state'?null:'state'));
+on('labelPanelToggle','click',()=>setLabelPanel(!$('labelPanel').hidden&&$('labelPanel').dataset.panelView==='details'?null:'details'));
+on('labelPanelClose','click',()=>setLabelPanel());
 on('backToProblems','click',()=>{S.labelStep=1;renderTags();});
 on('selectReviewPage','click',async()=>{const page=Math.floor(S.index/40);await getPage(page);for(const item of S.pages.get(page)||[])S.selected.add(item.id);renderSelection();renderThumbs();});
 on('confirmReviewSelected','click',async()=>{
@@ -504,16 +532,17 @@ on('locate','click',async()=>{
 });on('fit','click',resetTransform);on('rotate','click',()=>{S.rotation=(S.rotation+90)%360;transform();});
 on('fullResolution','click',()=>S.current&&showPhoto(S.current,true));on('retryImage','click',()=>S.current&&showPhoto(S.current));
 on('contextDetails','toggle',async()=>{if($('contextDetails').open&&S.current){const id=S.current.id,data=await api('/api/context?id='+id);if(id===S.current?.id)$('caseContext').textContent=JSON.stringify(data,null,2);}});
-$('photoStage').addEventListener('wheel',e=>{if(!S.current)return;e.preventDefault();S.zoom=Math.min(8,Math.max(.5,S.zoom*(e.deltaY<0?1.15:1/1.15)));transform();if(S.zoom>1.8&&!S.original){S.original=true;showPhoto(S.current,true).catch(fail);}},{passive:false});
+$('photoStage').addEventListener('wheel',e=>{if(!S.current||e.target.closest('#boxEditor'))return;e.preventDefault();S.zoom=Math.min(8,Math.max(.5,S.zoom*(e.deltaY<0?1.15:1/1.15)));transform();if(S.zoom>1.8&&!S.original){S.original=true;showPhoto(S.current,true).catch(fail);}},{passive:false});
 let drag=null;
-on('photoStage','pointerdown',e=>{if(e.target.tagName==='BUTTON')return;drag={x:e.clientX,y:e.clientY,px:S.panX,py:S.panY};$('photoStage').setPointerCapture(e.pointerId);});
+on('photoStage','pointerdown',e=>{if(e.button!==0||e.target.closest('button,#boxEditor'))return;drag={x:e.clientX,y:e.clientY,px:S.panX,py:S.panY};$('photoStage').setPointerCapture(e.pointerId);});
 on('photoStage','pointermove',e=>{if(drag){S.panX=drag.px+e.clientX-drag.x;S.panY=drag.py+e.clientY-drag.y;transform();}});
 on('photoStage','pointerup',()=>drag=null);on('photoStage','pointercancel',()=>drag=null);
 on('clearSelection','click',()=>{S.selected.clear();renderSelection();renderThumbs();});
 on('batch','click',()=>{
   if(!S.current)return;
   const value=S.current.label;
-  $('batchSummary').textContent='将右侧当前标签追加到 '+S.selected.size+' 张：问题点 '+(value.defects.join('、')||value.image_state||'未选择')+'；责任 '+value.responsibilities.join('、')+(value.note?'；备注也将追加。':'。')+'原有标签保留，完成后可撤销。';
+  setLabelPanel('details');
+  $('batchSummary').textContent='将当前图片标签追加到 '+S.selected.size+' 张：问题点 '+(value.defects.join('、')||value.image_state||'未选择')+'；责任 '+value.responsibilities.join('、')+(value.note?'；备注也将追加。':'。')+'原有标签保留，完成后可撤销。';
   $('batchPanel').hidden=false;$('batchPanel').scrollIntoView({block:'nearest'});
 });
 on('cancelBatch','click',()=>$('batchPanel').hidden=true);
@@ -524,17 +553,18 @@ on('applyImport','click',async()=>{await saveDraft();const result=await api('/ap
 on('export','click',async()=>{await saveDraft();const link=document.createElement('a');link.href='/api/export?'+params({format:$('exportFormat').value});link.download='';link.click();toast('导出当前筛选的已确认标签；暂存请先按 Enter 确认');});
 document.addEventListener('keydown',e=>{
   if(e.defaultPrevented)return;
-  if(e.key==='Escape'){for(const details of document.querySelectorAll('.add-tag-details[open],#contextDetails[open],#responsibilityMatrix[open]'))details.open=false;return;}
+  if(e.key==='Escape'){setLabelPanel();for(const details of document.querySelectorAll('.add-tag-details[open],#contextDetails[open],#responsibilityMatrix[open]'))details.open=false;return;}
   if(e.key==='Enter'&&e.target.closest('#recommendationPanel'))return;
   if(e.target.matches('input,textarea,select,[contenteditable=true]'))return;
-  if(e.key==='Enter'&&e.target.closest('button')&&e.target.closest('button').id!=='commit')return;
+  if(e.key==='Enter'&&e.target.closest('button')&&!['commit','workspaceCommit'].includes(e.target.closest('button').id))return;
   if(e.ctrlKey&&e.key.toLowerCase()==='z'){e.preventDefault();$('undo').click();return;}
-  if(e.key==='Enter'){e.preventDefault();commit().catch(fail);return;}
+  if(e.key==='Enter'){e.preventDefault();(e.target.closest('#labelPanel')?commit():submitWorkspace()).catch(fail);return;}
   if(e.key==='ArrowLeft'||e.key==='ArrowRight'){e.preventDefault();selectIndex(S.index+(e.key==='ArrowLeft'?-1:1)).catch(fail);return;}
-  if(e.code.startsWith('Digit')&&!e.ctrlKey&&!e.altKey){const n=Number(e.code.slice(5))-1,group=e.shiftKey?'responsibility':'defect';if((e.shiftKey&&S.labelStep!==2)||(!e.shiftKey&&S.labelStep===2))return;if(n>=0&&n<5&&S.tags[group][n]){e.preventDefault();toggleTag(group,S.tags[group][n]);}}
+  if(e.code.startsWith('Digit')&&!e.ctrlKey&&!e.altKey&&!$('labelPanel').hidden){const n=Number(e.code.slice(5))-1,group=e.shiftKey?'responsibility':'defect';if((e.shiftKey&&S.labelStep!==2)||(!e.shiftKey&&S.labelStep===2))return;if(n>=0&&n<5&&S.tags[group][n]){e.preventDefault();toggleTag(group,S.tags[group][n]);}}
 });
 window.addEventListener('beforeunload',e=>{if(S.dirty){e.preventDefault();e.returnValue='';}});
 document.addEventListener('click',e=>{for(const details of document.querySelectorAll('.add-tag-details[open],#contextDetails[open],#responsibilityMatrix[open]'))if(!details.contains(e.target))details.open=false;});
+document.addEventListener('click',e=>{if(!$('labelPanel').hidden&&!e.target.closest('#labelPanel,#labelPanelToggle,#imageStateToggle'))setLabelPanel();});
 const launchStatus=new URLSearchParams(location.search).get('status');
 if(launchStatus&&[...$('statusFilter').options].some(option=>option.value===launchStatus))$('statusFilter').value=launchStatus;
 renderStatusControls();
