@@ -1,6 +1,6 @@
 {
   "training": {
-    "source_commit": "be87eed2735bfcc7c255d0aadb52e097f022f5a0",
+    "source_commit": "dde814ea101684f48e066fc618fbc6d63be08ad3",
     "files": [
       {
         "path": ".gitignore",
@@ -20,11 +20,15 @@
       },
       {
         "path": "REVIEW_LOOP.md",
-        "sha256": "b20d28abf06642be2edfc3ba14111c2baf1edfa1a4e6671456105cdd5d742b96"
+        "sha256": "afafbbe2967e4754a09df0dfe0d4e52a5ccb0d66d18e5e29b51f1bf90737d9c0"
       },
       {
         "path": "correction_cycle.py",
-        "sha256": "6304bc7def8a05b7e027265ae645e106a60c3f8b22feb87edfcd8d7487ebc968"
+        "sha256": "ef06880004186eb27fb0f808f0b7def33a9f0a32b1b470d9b7116bf80d889db8"
+      },
+      {
+        "path": "correction_focus.py",
+        "sha256": "e262b11085233e64292d2a56ab987d6f052dc7206c046cb3deefb1c2d12418ce"
       },
       {
         "path": "enrich_proposal_types.py",
@@ -37,6 +41,10 @@
       {
         "path": "finetune_classifier.py",
         "sha256": "17efaf12f2a6e3f474ad6ad175fe231d3814eb0d5f4ab9a6d362bac05e27bcd9"
+      },
+      {
+        "path": "fit_roi_verifier.py",
+        "sha256": "faf799e8353d924c4333bdb628cabf3ac2f1b70ff1d85c3afb06b4f7a8fcf34c"
       },
       {
         "path": "generate_box_proposals.py",
@@ -75,6 +83,10 @@
         "sha256": "8109e0f78f92fa7a109258e0475f68d68c0396ba6293a9d1922259d472795609"
       },
       {
+        "path": "roi_verifier.py",
+        "sha256": "96e780d3bedd5ce0490f112b6eb65b164544bfb1f8102d9082e705e444d1e6df"
+      },
+      {
         "path": "test_box_proposals.py",
         "sha256": "428122f63953374767d2152852e0ec3fb235df7f293dfff4f6b594104b51d61c"
       },
@@ -84,11 +96,19 @@
       },
       {
         "path": "test_correction_cycle.py",
-        "sha256": "0581e9e7221393e2c83ac59759ad144d39b6723490661b946ca708e03169ea12"
+        "sha256": "8ec20e68da34d930035a7f812b7499b6e3fd4c2670dcbd051a5176b901643af8"
+      },
+      {
+        "path": "test_correction_focus.py",
+        "sha256": "9d3f0046fdd323a75df46d6cbf85af6a4de936bb80ca19e6bbb7ee6f137d61be"
       },
       {
         "path": "test_detector_proposals.py",
         "sha256": "172fc371c8eb29ed64db00dadfa171d9e2820136674c6ae22b7d960beeffa780"
+      },
+      {
+        "path": "test_fit_roi_verifier.py",
+        "sha256": "4cc7b4a0cd9df078c33c0b52eb29f276e8b68f29931fabb50a7a2d8c2febb586"
       },
       {
         "path": "test_hard_positive.py",
@@ -112,7 +132,11 @@
       },
       {
         "path": "test_roi_feedback.py",
-        "sha256": "d916819af4d440136fda28cd1a9e493de8876a57f2079f0f95d66cc4e7dcacee"
+        "sha256": "2161e6c8cf9bb47be2d3caaa0b7f3f5c97659370a001f39718eb72e7d3984111"
+      },
+      {
+        "path": "test_roi_verifier.py",
+        "sha256": "38379084c67882765a57c630d8f7d91ade97c3398a769b84899d003ed49918dd"
       },
       {
         "path": "test_train_detector.py",
@@ -120,7 +144,7 @@
       },
       {
         "path": "test_training_report.py",
-        "sha256": "a336f66bc6d44932eb8027a8ed8862a4d0fc56a376be92f5e5306e36e4eae0dd"
+        "sha256": "97daed03bb74343e907fba046589de9158209164c1d1422fb16d2d187dba8844"
       },
       {
         "path": "test_typed_proposals.py",
@@ -132,7 +156,7 @@
       },
       {
         "path": "train_detector.py",
-        "sha256": "f13f08eec2fed286f2789afe0c0edea4a4e9f360f8393eedb69bbb35845b114e"
+        "sha256": "f6458c418d2ae85ba17596ebdba1d7a7ef2be85c3a92d6fa0e5d96cb6e0cf4d5"
       },
       {
         "path": "training_report.py",

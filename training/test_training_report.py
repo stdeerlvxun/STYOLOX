@@ -3,10 +3,20 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 from training_report import round_summary
-from train_detector import evaluate_predictions
+from train_detector import evaluate_predictions, correction_selection_key
 
 
 class TrainingReportTests(unittest.TestCase):
+    def test_type_gain_cannot_select_checkpoint_that_forgets_locations(self):
+        base={'class_and_location':dict(recall=.2,f2=.2,fp=20,precision=.2),
+              'location_only':dict(recall=.6,f2=.5,fp=15)}
+        worse={'class_and_location':dict(recall=.4,f2=.4,fp=18,precision=.4),
+               'location_only':dict(recall=.5,f2=.45,fp=14)}
+        better={'class_and_location':dict(recall=.4,f2=.4,fp=18,precision=.4),
+                'location_only':dict(recall=.6,f2=.6,fp=10)}
+        self.assertGreater(correction_selection_key(base,base,0),correction_selection_key(worse,base,5))
+        self.assertGreater(correction_selection_key(better,base,8),correction_selection_key(base,base,0))
+
     def test_whole_image_pass_requires_all_found_no_extra_and_correct_type(self):
         records = [dict(image_id=1, relative_path='one', group='a', boxes=[dict(class_id=0, xyxy=[0,0,10,10])]),
                    dict(image_id=2, relative_path='two', group='b', boxes=[dict(class_id=0, xyxy=[0,0,10,10])])]

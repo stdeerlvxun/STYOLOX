@@ -1,5 +1,6 @@
 import hashlib
 import json
+import math
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -102,8 +103,26 @@ class NormalRegionFeedbackTests(unittest.TestCase):
             'model': {'head.cls_preds.0.bias': torch.tensor([1., 2.]), 'head.obj.weight': torch.tensor([3.])}}
         categories = [{'id': 0, 'name': 'B'}, {'id': 1, 'name': 'new'}, {'id': 2, 'name': 'A'}]
         result = transferred_state(target, checkpoint, categories)
-        self.assertEqual(result['head.cls_preds.0.bias'].tolist(), [2., 0., 1.])
+        self.assertEqual(result['head.cls_preds.0.bias'][[0,2]].tolist(), [2., 1.])
+        self.assertAlmostEqual(result['head.cls_preds.0.bias'][1].item(), math.log(.01/.99), places=5)
         self.assertEqual(result['head.obj.weight'].item(), 3.)
+
+    def test_new_class_is_conservative_even_on_large_old_features_and_can_learn(self):
+        target={'head.cls_preds.0.weight':torch.randn(2,4), 'head.cls_preds.0.bias':torch.randn(2)}
+        source={'head.cls_preds.0.weight':torch.ones(1,4), 'head.cls_preds.0.bias':torch.tensor([.7])}
+        checkpoint={'categories':[{'id':0,'name':'old'}], 'model':source}
+        categories=[{'id':0,'name':'new'}, {'id':1,'name':'old'}]
+        result=transferred_state(target,checkpoint,categories)
+        weight=result['head.cls_preds.0.weight'].clone().requires_grad_()
+        bias=result['head.cls_preds.0.bias'].clone().requires_grad_()
+        features=torch.tensor([[100.,-50.,200.,70.]])
+        logits=features@weight.T+bias
+        self.assertAlmostEqual(logits[0,0].sigmoid().item(), .01, places=6)
+        self.assertTrue(torch.equal(weight[1],source['head.cls_preds.0.weight'][0]))
+        torch.nn.functional.binary_cross_entropy_with_logits(logits[0,0],torch.tensor(1.)).backward()
+        self.assertGreater(weight.grad[0].abs().sum().item(),0)
+        resumed=transferred_state(result,{'categories':categories,'model':result},categories)
+        self.assertTrue(torch.equal(resumed['head.cls_preds.0.weight'],result['head.cls_preds.0.weight']))
 
     def test_backend_feedback_export_revalidated_and_kept_separate_from_positive_truth(self):
         with tempfile.TemporaryDirectory() as directory:

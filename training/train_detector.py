@@ -157,6 +157,16 @@ def select_threshold(records, predictions, categories):
     return selected, candidates
 
 
+def correction_selection_key(report, baseline, epoch):
+    """Issue learning cannot win checkpoint selection by forgetting existing locations."""
+    location, original = report['location_only'], baseline['location_only']
+    typed, old_typed = report['class_and_location'], baseline['class_and_location']
+    safe = (location['recall'] >= original['recall'] and location['f2'] >= original['f2']
+            and location['fp'] <= original['fp'] and typed['recall'] >= old_typed['recall']
+            and typed['f2'] >= old_typed['f2'] and typed['fp'] <= old_typed['fp'])
+    return (safe, location['recall'], typed['f2'], -location['fp'], typed['precision'], -epoch)
+
+
 def read_rgb(image):
     if isinstance(image, (str, Path)):
         with Image.open(image) as source:
@@ -180,6 +190,7 @@ class Detector:
         self.nms = nms
         self.max_predictions = max_predictions
         self.class_agnostic = len(categories) == 1 and categories[0]['name'] == '问题位置'
+        self.roi_verifier = None
 
     @torch.inference_mode()
     def predict_image(self, image, threshold=None):
@@ -213,6 +224,13 @@ class Detector:
                                 'score': float(value[4]*value[5]),
                                 'xyxy': [float(x1), float(y1), float(x2), float(y2)],
                                 'xywh': xywh, 'normalized_xywh': xywh})
+        if self.roi_verifier and predictions:
+            from roi_verifier import extract_roi_features, keep_probabilities
+            vectors = extract_roi_features(self, rgb, predictions,
+                context_scale=self.roi_verifier['context_scale'])
+            probabilities = keep_probabilities(vectors, self.roi_verifier)
+            predictions = [dict(prediction, roi_keep_probability=probability)
+                for prediction, probability in zip(predictions, probabilities) if probability > .05]
         return predictions
 
 
@@ -222,8 +240,10 @@ def load_detector(run_dir, device='cuda'):
     config = checkpoint['config']
     model = make_model(len(checkpoint['categories']), config)
     model.load_state_dict(checkpoint['model'])
-    return Detector(model, checkpoint['categories'], config['input_size'], device,
-                    checkpoint['threshold'], config['nms'], config['max_predictions'])
+    detector = Detector(model, checkpoint['categories'], config['input_size'], device,
+                        checkpoint['threshold'], config['nms'], config['max_predictions'])
+    detector.roi_verifier = config.get('roi_verifier')
+    return detector
 
 
 def predict_image(detector, image, threshold=None):
@@ -253,6 +273,13 @@ def transferred_state(target_state, checkpoint, categories):
         for category in categories:
             if category['name'] in previous:
                 value[int(category['id'])] = source[key][previous[category['name']]]
+            elif key.endswith('.weight'):
+                # Old learned class features can amplify random new output rows.
+                # A truly new class starts at a constant 1% prior and can learn
+                # from its own positives; previously learned classes are copied.
+                value[int(category['id'])].zero_()
+            elif key.endswith('.bias'):
+                value[int(category['id'])].fill_(math.log(.01/.99))
         result[key] = value
     return result
 
@@ -285,12 +312,12 @@ def feedback_sample(record, rgb, input_size, max_labels):
     for i, box in enumerate(record['boxes']):
         x1, y1, x2, y2 = transform_rois([box['xyxy']], width, ratio, flipped)[0]
         target[i] = [box['class_id'], (x1+x2)/2, (y1+y2)/2, x2-x1, y2-y1]
-    return image, target, transform_rois(record['negative_rois'], width, ratio, flipped)
+    return image, target, transform_rois(record.get('negative_rois', []), width, ratio, flipped)
 
 
 def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_size=512,
           adapt_backbone=False, defer_test=False, initialize_from=None,
-          location_only=False, fixed_threshold=None):
+          location_only=False, fixed_threshold=None, correction_focus=False):
     started = time.monotonic()
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -314,6 +341,13 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
     config['location_only'] = location_only
     config['class_agnostic'] = location_only
     config['fixed_threshold'] = fixed_threshold
+    config['correction_focus'] = bool(correction_focus)
+    if correction_focus and (location_only or not initialize_from or fixed_threshold is None):
+        raise ValueError('Correction focus requires a retained typed model and a fixed threshold')
+    if correction_focus:
+        config.update(backbone_frozen=True, train_head_only=True,
+                      frozen_early_layers=['all_backbone_and_neck', 'head.stems'],
+                      batch_norm_running_statistics_frozen=True, learning_rate=.00003)
     if fixed_threshold is not None:
         config['selection'] = 'Fixed threshold; validation recall with FP <= 2*GT, then F2; over-budget fallback F2'
     config['partial_annotations'] = 'For images with classified problems lacking boxes, ignore unmatched objectness anchors; retain positives and all class/regression losses'
@@ -331,6 +365,9 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
         'repeats_per_epoch': 1, 'normalization': 'bounded total auxiliary mean BCE after YOLOX foreground normalization',
         'scope': 'normal ROI negative objectness only; all other unboxed anchors ignored',
         'whole_image_normal': False, 'positive_truth_changed': False}
+    if correction_focus:
+        config['human_normal_roi_feedback'].update(weight=.5, repeats_per_epoch=2,
+            scope='confirmed local false-positive ROIs only; joint phase only, unknown anchors ignored')
     splits = {split: [r for r in records if r['split'] == split] for split in ('train', 'val', 'test')}
     if not splits['val'] and any(r['split'] == 'validation' for r in records):
         splits['val'] = [r for r in records if r['split'] == 'validation']
@@ -350,6 +387,16 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
         if record.get('has_draft') or record.get('image_state') not in (None, '', 'defect') or not record.get('defects'):
             raise ValueError('Normal ROI feedback image violates unchanged classification exclusions')
     hard_positive_records, config['human_correction_extra_practice'] = hard_positive_repeats(splits['train'])
+    focus_records = []
+    if correction_focus:
+        from correction_focus import select_focus_records
+        focus_records, focus_report = select_focus_records(splits['train'])
+        hard_positive_records = []  # Use real local views instead of repeating the same full image.
+        config['correction_focus_policy'] = {**focus_report,
+            'classification_epochs': max(1, epochs*3//5), 'classification_lr': .00003,
+            'geometry_lr': .00001, 'geometry_scope': 'head only; retained backbone and neck frozen',
+            'minimum_joint_epochs': min(5, max(1, epochs//4)),
+            'selection': 'same fixed validation threshold; class and location must not regress from initialization'}
     torch.set_num_threads(2)
     random.seed(config['seed'])
     np.random.seed(config['seed'])
@@ -379,6 +426,9 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
         config['initialize_from'] = str(checkpoint_path)
         config['initialize_from_sha256'] = sha256(checkpoint_path)
         config['category_transfer'] = 'class output channels copied by issue name'
+        config['new_class_initialization'] = 'only unseen issue rows: zero weight and 1 percent sigmoid prior'
+        if correction_focus and checkpoint['config'].get('roi_verifier'):
+            config['roi_verifier'] = checkpoint['config']['roi_verifier']
     else:
         state = torch.load(COCO_WEIGHTS, map_location='cpu', weights_only=False)
         state = state.get('model', state)
@@ -390,7 +440,11 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
     write_json(run_dir/'initialization.json', {'loaded': len(matching), 'missing': list(missing),
                                             'unexpected': list(unexpected)})
     baseline_state = copy.deepcopy(model.state_dict())
-    if adapt_backbone:
+    if correction_focus:
+        from correction_focus import parameter_phase
+        for name, parameter in model.named_parameters():
+            parameter.requires_grad_(parameter_phase(name, 'joint') != 'frozen')
+    elif adapt_backbone:
         for name, parameter in model.named_parameters():
             parameter.requires_grad_(adaptable_parameter(name))
     else:
@@ -400,49 +454,82 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
                {'names': [name for name, p in model.named_parameters() if p.requires_grad],
                 'count': sum(p.numel() for p in model.parameters() if p.requires_grad)})
     model = model.to(device)
-    optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
-                                 lr=config['learning_rate'], weight_decay=config['weight_decay'])
+    if correction_focus:
+        optimizer = torch.optim.AdamW([
+            {'params': [p for n,p in model.named_parameters() if parameter_phase(n,'joint') == 'classification'], 'lr': .00003},
+            {'params': [p for n,p in model.named_parameters() if parameter_phase(n,'joint') == 'geometry'], 'lr': .00001}],
+            weight_decay=config['weight_decay'])
+    else:
+        optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
+                                     lr=config['learning_rate'], weight_decay=config['weight_decay'])
     partial_batch = []
     roi_batch = []
     centers = anchor_centers(input_size, device)
     def mask_partial_negatives(module, inputs, output):
         return region_objectness_loss(output, inputs[1], partial_batch, roi_batch, centers,
-                                       weight=.25, bounded=True)
+                                       weight=.5 if correction_focus else .25, bounded=True)
     objectness_hook = model.head.bcewithlog_loss.register_forward_hook(mask_partial_negatives)
     transform = TrainTransform(max_labels=max(20, max(len(r['boxes']) for r in records)),
                                flip_prob=.5, hsv_prob=.5)
     write_json(run_dir/'planned-config.json', config)
     detector = Detector(model, categories, input_size, device, nms=config['nms'], max_predictions=10)
+    detector.roi_verifier = config.get('roi_verifier')
     best_key = None
     best_state = None
     best_selection = None
     history = []
+    initial_report = None
+    if correction_focus:
+        initial_predictions = predict_records(detector, splits['val'], cache)
+        initial_report, _ = evaluate_predictions(splits['val'], initial_predictions, categories, fixed_threshold)
+        write_json(run_dir/'initial-validation.json', initial_report)
+        best_state = {name: value.detach().cpu().clone() for name, value in model.state_dict().items()}
+        best_key = correction_selection_key(initial_report, initial_report, 0)
+        best_selection = {'epoch': 0, 'threshold': fixed_threshold,
+                          'validation': {'threshold': fixed_threshold, **initial_report['class_and_location']},
+                          'threshold_candidates': [], 'rule': config['correction_focus_policy']['selection'],
+                          'test_used': False}
+        torch.save({'model': best_state, 'categories': categories, 'config': config,
+                    'threshold': fixed_threshold, 'epoch': 0}, run_dir/'detector.pt')
+        write_json(run_dir/'selection.json', best_selection)
     train_started = time.monotonic()
+    joint_epochs = 0
     torch.cuda.reset_peak_memory_stats()
     for epoch in range(1, epochs+1):
         epoch_started = time.monotonic()
         model.train()
-        if adapt_backbone:
+        phase = ('joint' if not correction_focus or epoch > max(1, epochs*3//5)
+                 or time.monotonic()-train_started >= seconds*.65 else 'classification')
+        joint_epochs += phase == 'joint'
+        if correction_focus:
+            for name, parameter in model.named_parameters():
+                parameter.requires_grad_(parameter_phase(name, phase) != 'frozen')
+        if adapt_backbone or correction_focus:
             # A batch of one or two is too small to re-estimate pretrained BN statistics.
             for module in model.modules():
                 if isinstance(module, torch.nn.BatchNorm2d):
                     module.eval()
         else:
             model.backbone.eval()
-        model.head.use_l1 = epoch >= 20
-        order = list(splits['train']) + hard_positive_records + feedback_records
+        model.head.use_l1 = phase == 'joint' if correction_focus else epoch >= 20
+        roi_order = (feedback_records*2 if phase == 'joint' else []) if correction_focus else feedback_records
+        order = list(splits['train']) + hard_positive_records + roi_order + focus_records
         random.shuffle(order)
         losses = []
         for offset in range(0, len(order), batch_size):
             inputs, targets = [], []
-            partial_batch[:] = [bool(record.get('classification_problems_without_boxes'))
-                                for record in order[offset:offset+batch_size]]
+            partial_batch[:] = []
             roi_batch[:] = []
             for record in order[offset:offset+batch_size]:
-                if record.get('negative_rois'):
-                    image, target, rois = feedback_sample(record, cache[record['image_id']], input_size, transform.max_labels)
+                rgb = cache[record['image_id']]
+                if record.get('focus_crop'):
+                    from correction_focus import crop_focus_sample
+                    record, rgb = crop_focus_sample(record, rgb, rng=random)
+                partial_batch.append(bool(record.get('classification_problems_without_boxes')) or bool(record.get('crop_partial')))
+                if record.get('negative_rois') or correction_focus:
+                    image, target, rois = feedback_sample(record, rgb, input_size, transform.max_labels)
                 else:
-                    bgr = np.ascontiguousarray(cache[record['image_id']][..., ::-1])
+                    bgr = np.ascontiguousarray(rgb[..., ::-1])
                     labels = np.array([b['xyxy'] + [b['class_id']] for b in record['boxes']], dtype=np.float32)
                     image, target = transform(bgr, labels, (input_size, input_size))
                     rois = []
@@ -463,6 +550,9 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
         epoch_log = {'epoch': epoch, 'loss': sum(losses)/len(losses),
                      'seconds': time.monotonic()-epoch_started,
                      'hard_positive_extra_images': len(hard_positive_records)}
+        if correction_focus:
+            epoch_log.update(phase=phase, focus_crop_images=len(focus_records),
+                             negative_roi_extra_images=len(roi_order), l1_enabled=model.head.use_l1)
         reached_budget = time.monotonic()-train_started >= seconds
         if epoch == 1 or epoch % 5 == 0 or epoch == epochs or reached_budget:
             model.eval()
@@ -477,6 +567,10 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
                 within_budget = selected['fp'] <= 2 * selected['support']
                 key = (within_budget, selected['recall'] if within_budget else selected['f2'],
                        selected['f2'], -selected['fp'], -epoch)
+                if correction_focus:
+                    key = correction_selection_key(report, initial_report, epoch)
+                    epoch_log['location_validation'] = report['location_only']
+                    epoch_log['baseline_non_regression_met'] = bool(key[0])
             epoch_log['validation'] = selected
             if best_key is None or key > best_key:
                 best_key = key
@@ -490,7 +584,7 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
         history.append(epoch_log)
         write_json(run_dir/'training-history.json', history)
         print(json.dumps(epoch_log, ensure_ascii=False), flush=True)
-        if reached_budget:
+        if reached_budget and (not correction_focus or joint_epochs >= config['correction_focus_policy']['minimum_joint_epochs']):
             break
     training_seconds = time.monotonic()-train_started
     objectness_hook.remove()
@@ -723,6 +817,7 @@ if __name__ == '__main__':
     parser.add_argument('--initialize-from', type=Path)
     parser.add_argument('--location-only', '--class-agnostic', dest='location_only', action='store_true', help='Train one generic issue-location class while preserving original human labels')
     parser.add_argument('--fixed-threshold', type=float, help='Keep the pre-registered threshold fixed across checkpoints and comparisons')
+    parser.add_argument('--correction-focus', action='store_true', help='Retain localization while learning reviewed issue types, then gently adapt geometry with local views')
     parser.add_argument('--compare-base', type=Path, help='Validation-only comparison after training or with --compare-only')
     parser.add_argument('--compare-only', action='store_true')
     parser.add_argument('--compare-validation-to', type=Path,
@@ -740,6 +835,6 @@ if __name__ == '__main__':
     else:
         train(args.dataset, args.run, args.epochs, args.seconds, args.batch_size, args.input_size,
               args.adapt_backbone, args.defer_test, args.initialize_from, args.location_only,
-              args.fixed_threshold)
+              args.fixed_threshold, args.correction_focus)
         if args.compare_base:
             print(json.dumps(compare_validation(args.dataset, args.run, args.compare_base), ensure_ascii=False), flush=True)

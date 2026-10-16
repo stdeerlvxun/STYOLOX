@@ -110,6 +110,15 @@ class CycleProtectionTests(unittest.TestCase):
         self.assertFalse(worker.promotion_decision(comparison(f2=.5, recall=.3, base_recall=.2))[0])
         self.assertFalse(worker.promotion_decision(comparison(support=9))[0])
 
+    def test_joint_assistance_preserves_location_minimum_and_requires_type_improvement(self):
+        report=comparison(base_recall=.2,base_f2=.2,recall=.3,f2=.3)
+        report['comparison_objective']='issue_type_and_location'
+        report['base']={'location_only':{'recall':.6,'f2':.5,'fp':20}}
+        report['candidate']['location_only']={'recall':.6,'f2':.55,'fp':18}
+        self.assertTrue(worker.promotion_decision(report)[0])
+        report['candidate']['location_only']['recall']=.55
+        self.assertFalse(worker.promotion_decision(report)[0])
+
     def test_name_alignment_and_no_test_reuse_are_required(self):
         for key, value in [('problem_name_mapping', False), ('same_validation_images', False), ('test_used', True)]:
             report = comparison();report[key] = value

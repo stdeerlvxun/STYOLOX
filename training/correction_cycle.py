@@ -62,6 +62,12 @@ def validate_config(config):
         raise ValueError('minimum_validation_boxes must be at least 10')
     if type(config.get('class_agnostic',False)) is not bool:
         raise ValueError('class_agnostic must be a boolean')
+    if type(config.get('correction_focus_enabled',False)) is not bool:
+        raise ValueError('correction_focus_enabled must be a boolean')
+    if type(config.get('roi_verifier_enabled',False)) is not bool:
+        raise ValueError('roi_verifier_enabled must be a boolean')
+    if config.get('correction_focus_enabled') and config.get('class_agnostic'):
+        raise ValueError('Correction focus must retain real issue classes')
     cutoff=config.get('fixed_threshold')
     if cutoff is not None and (type(cutoff) not in (int,float) or not math.isfinite(cutoff) or not 0<cutoff<1):
         raise ValueError('fixed_threshold must be a finite fraction')
@@ -175,7 +181,22 @@ def promotion_decision(comparison, minimum_recall=.5, minimum_support=10):
         return False, 'invalid_validation_metrics'
     if candidate.get('tp', 0)+candidate.get('fn', 0)<minimum_support:
         return False, 'validation_support_below_minimum'
-    if candidate['recall']<minimum_recall:
+    # The registered minimum belongs to finding locations. Type labeling is an
+    # assistive second step; it must improve on the retained model, not borrow
+    # an absolute location cutoff. Human automatic-finalization stays disabled.
+    recall_for_minimum = candidate['recall']
+    if comparison.get('comparison_objective') == 'issue_type_and_location':
+        old_location = comparison.get('base', {}).get('location_only', {})
+        new_location = candidate.get('location_only', {})
+        location_values = [row.get(key) for row in (old_location, new_location) for key in ('recall','f2')]
+        if any(type(v) not in (int,float) or not math.isfinite(v) or not 0<=v<=1 for v in location_values):
+            return False, 'missing_or_invalid_location_comparison'
+        if (new_location['recall'] < old_location['recall'] or new_location['f2'] < old_location['f2']
+            or type(new_location.get('fp')) is not int or type(old_location.get('fp')) is not int
+            or new_location['fp'] > old_location['fp']):
+            return False, 'location_metrics_regressed'
+        recall_for_minimum = new_location['recall']
+    if recall_for_minimum<minimum_recall:
         return False, 'validation_recall_below_minimum'
     if candidate['recall']+1e-12<base['recall']:
         return False, 'validation_recall_regressed'
@@ -331,12 +352,22 @@ def execute_cycle(config, config_path, payload, items, run, report):
         report.update(status='waiting_for_trainable_confirmed_images', feedback_ids_actually_trained=[])
         return report
     training_arguments=[python, root/'train_detector.py', '--dataset', dataset_path, '--run', detector,
-                 '--adapt-backbone', '--input-size', '640', '--batch-size', '2', '--epochs', '50',
-                 '--seconds', '240', '--initialize-from', config['current_detector_run'], '--defer-test']
+                 '--adapt-backbone', '--input-size', '640', '--batch-size',
+                 '4' if config.get('correction_focus_enabled') else '2', '--epochs', '50',
+                 '--seconds', '900' if config.get('correction_focus_enabled') else '240',
+                 '--initialize-from', config['current_detector_run'], '--defer-test']
+    if config.get('correction_focus_enabled'):training_arguments.append('--correction-focus')
     if config.get('class_agnostic',False):training_arguments.append('--class-agnostic')
     if config.get('fixed_threshold') is not None:
         training_arguments.extend(['--fixed-threshold',str(config['fixed_threshold'])])
-    run_process(training_arguments,timeout=600,cwd=root,log=run/'train.log')
+    run_process(training_arguments,timeout=1200 if config.get('correction_focus_enabled') else 600,
+                cwd=root,log=run/'train.log')
+    if config.get('roi_verifier_enabled') and sum(len(row.get('negative_rois',[]))
+            for row in dataset.get('negative_feedback_records',[])) >= 5:
+        verified_detector=run/'roi-detector'
+        run_process([python,root/'fit_roi_verifier.py','--dataset',dataset_path,
+                     '--base-run',detector,'--run',verified_detector],timeout=300,cwd=root,log=run/'roi-verifier.log')
+        detector=verified_detector
     metrics = read_json(detector/'metrics.json')
     if metrics.get('test') is not None or metrics.get('test_evaluation_pending') is not True:
         raise ValueError('Automatic rounds must not reuse the held-out test set')
