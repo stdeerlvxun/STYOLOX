@@ -1,6 +1,6 @@
 {
   "training": {
-    "source_commit": "dde814ea101684f48e066fc618fbc6d63be08ad3",
+    "source_commit": "d10ca6d47a2e4a338dfbd7ccc311307fbff9ab0f",
     "files": [
       {
         "path": ".gitignore",
@@ -15,8 +15,12 @@
         "sha256": "48db7b1427362f9b879528021765327b6d48edd7a28e96df73f48b2418875616"
       },
       {
+        "path": "OPEN_SOURCE_EVALUATION.md",
+        "sha256": "2c284a5dc3677287cbf084d419a9caad7cdfcd0af32c752c8aaf535952842f67"
+      },
+      {
         "path": "README.md",
-        "sha256": "b12cdd5ed053c4285ddcf64b93aedb1b72c2133149d32f4b4548289d82bdb0fe"
+        "sha256": "4de13fbe915b0ffedfa83bbfa238060c5ea08bfd6cd189d98ba18e2827914dc5"
       },
       {
         "path": "REVIEW_LOOP.md",
@@ -33,6 +37,10 @@
       {
         "path": "enrich_proposal_types.py",
         "sha256": "97945dea46d60fcabbdea0377baa86f01aeb8a05d596ccc3b7c1074aacac5f14"
+      },
+      {
+        "path": "evaluate_anomalib.py",
+        "sha256": "422dd1b993b3591ad76275938a0c0aa239dd50e1be99475929362d1bcf9b3120"
       },
       {
         "path": "export_recommendations.py",
@@ -105,6 +113,10 @@
       {
         "path": "test_detector_proposals.py",
         "sha256": "172fc371c8eb29ed64db00dadfa171d9e2820136674c6ae22b7d960beeffa780"
+      },
+      {
+        "path": "test_evaluate_anomalib.py",
+        "sha256": "f170659fad5433a5bb3bcc4a1a7dec6961b42ea49a06878efce1b561b00ef462"
       },
       {
         "path": "test_fit_roi_verifier.py",
