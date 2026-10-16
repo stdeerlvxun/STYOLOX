@@ -34,16 +34,22 @@
   function suggestionBoxes(){return proposalCurrent()&&A.proposal.status==='pending'&&!proposalAdopted()?A.proposal.boxes:[];}
   function renderOverlay(){
     const svg=el('annotationOverlay'),v=view();svg.replaceChildren();
-    svg.hidden=!A.active||!S.current||A.id!==S.current.id||el('photo').hidden||!v.imageWidth||(!A.boxes.length&&!A.drag&&!suggestionBoxes().length);
-    if(svg.hidden)return;
+    const hidden=!A.active||!S.current||A.id!==S.current.id||el('photo').hidden||!v.imageWidth||(!A.boxes.length&&!A.drag&&!suggestionBoxes().length);
+    // SVGElement does not reflect HTMLElement.hidden; remove the actual attribute.
+    svg.toggleAttribute('hidden',hidden);
+    if(hidden)return;
     svg.setAttribute('viewBox','0 0 '+v.width+' '+v.height);svg.style.transform=el('photo').style.transform;
     const rect=imageRect(v),boxes=A.boxes.map(box=>A.drag?.original?.id===box.id?{...box,...A.drag.box}:box);
     if(A.drag?.kind==='draw')boxes.push({...A.drag.box,id:'preview',problem:el('boxProblem').value});
     boxes.push(...suggestionBoxes().map(box=>({...box,suggestion:true})));
     for(const [index,box] of boxes.entries()){
       const x=rect.x+box.x*rect.width,y=rect.y+box.y*rect.height,selected=box.id===A.selected||box.id==='preview';
-      svg.append(svgNode('rect',{x,y,width:box.w*rect.width,height:box.h*rect.height,fill:'#245bd61a',
-        stroke:selected?'#ffdc57':box.suggestion?'#c2d4e8':'#5cc8ff','stroke-width':selected?2:1.5,
+      const color=selected?'#ff453a':box.suggestion?'#d58aff':'#00e6a0';
+      svg.append(svgNode('rect',{x,y,width:box.w*rect.width,height:box.h*rect.height,fill:'none',
+        stroke:'#17212e','stroke-opacity':.85,'stroke-width':selected?6:5,
+        'stroke-dasharray':box.suggestion?'6 4':'none','vector-effect':'non-scaling-stroke'}));
+      svg.append(svgNode('rect',{x,y,width:box.w*rect.width,height:box.h*rect.height,fill:color,
+        'fill-opacity':selected?.22:.12,stroke:color,'stroke-width':selected?3.5:2.5,
         'stroke-dasharray':box.suggestion?'6 4':'none','vector-effect':'non-scaling-stroke'}));
       const text=svgNode('text',{x:x+3,y:Math.max(14,y-5),fill:'#ffffff',stroke:'#17212e','stroke-width':3,
         'paint-order':'stroke','font-size':12/S.zoom,'font-family':'Microsoft YaHei, sans-serif'});
@@ -51,7 +57,7 @@
       text.textContent=(box.suggestion?'机器建议':(index+1))+' · '+box.problem;svg.append(text);
       if(selected&&!box.suggestion&&box.id!=='preview'){
         const size=9/v.zoom;for(const [cx,cy]of [[x,y],[x+box.w*rect.width,y],[x,y+box.h*rect.height],[x+box.w*rect.width,y+box.h*rect.height]])
-          svg.append(svgNode('rect',{x:cx-size/2,y:cy-size/2,width:size,height:size,fill:'#ffdc57',stroke:'#17212e','stroke-width':1/v.zoom}));
+          svg.append(svgNode('rect',{x:cx-size/2,y:cy-size/2,width:size,height:size,fill:color,stroke:'#ffffff','stroke-width':1.5/v.zoom}));
       }
     }
   }

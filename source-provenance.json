@@ -69,7 +69,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "51b7eca94a27c2c211691e62fca24b2260e0c607",
+    "source_commit": "8f131dd9a08444fab03ba402d46309953ed8c4ef",
     "files": [
       {
         "path": ".gitignore",
@@ -77,7 +77,7 @@
       },
       {
         "path": "DESIGN.md",
-        "sha256": "62cd22e9bf6af69d1c5940752321602828faa52198f207b4efcb8c2491708780"
+        "sha256": "7c3b06de2c41f1432a27f4590b65e66ac5604e367b26b4d788bf47942e1eca9a"
       },
       {
         "path": "PRODUCT.md",
@@ -169,7 +169,7 @@
       },
       {
         "path": "test_annotation_ui.cjs",
-        "sha256": "1b7631ddc1cb2f6b38f87787400e53ab3c6039b0bcfd1fb76087b7df77803b2a"
+        "sha256": "d1bb993c8df1c9e4263a25924bc5fc16c4a8365ce3fb1af0279ec008ddd1ab11"
       },
       {
         "path": "test_annotations.py",
@@ -193,7 +193,7 @@
       },
       {
         "path": "web/annotations.js",
-        "sha256": "07cd01d9f5fc379d0936accd7eb1f0a85b1892a963dc7f91a5c910556f34ab58"
+        "sha256": "d50f5ce07a65ef6b9ad5abb08d3f05ad0bc05f4ed82c1427c785d6de77dab865"
       },
       {
         "path": "web/app.js",

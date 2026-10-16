@@ -1,8 +1,11 @@
 const assert=require('node:assert/strict'),fs=require('node:fs'),vm=require('node:vm');
 class Element{
-  constructor(){this.children=[];this.events={};this.style={};this.value='';this.hidden=false;this.classList={toggle(){}};}
+  constructor(){this.children=[];this.events={};this.style={};this.value='';this.hidden=false;this.attributes={};this.classList={toggle(){}};}
   replaceChildren(){this.children=[];}append(child){this.children.push(child);child.parent=this;}
-  setAttribute(key,value){this[key]=value;}addEventListener(name,handler){(this.events[name]??=[]).push(handler);}
+  setAttribute(key,value){this.attributes[key]=String(value);this[key]=value;}
+  toggleAttribute(key,force){if(force)this.attributes[key]='';else delete this.attributes[key];return force;}
+  hasAttribute(key){return Object.hasOwn(this.attributes,key);}
+  addEventListener(name,handler){(this.events[name]??=[]).push(handler);}
   closest(){return null;}contains(child){return child===this;}setPointerCapture(){}
   getBoundingClientRect(){return {left:0,top:0};}
   async fire(name,event={}){for(const handler of this.events[name]||[])await handler({target:this,preventDefault(){},stopImmediatePropagation(){},...event});}
@@ -11,6 +14,7 @@ class Element{
   const elements={},el=id=>elements[id]??=(new Element());
   el('photoStage').clientWidth=800;el('photoStage').clientHeight=600;
   el('photo').naturalWidth=1600;el('photo').naturalHeight=900;el('statusFilter').value='error_review';
+  el('annotationOverlay').setAttribute('hidden','');
   const label={defects:['崩边'],responsibilities:['生产'],image_state:'defect',note:'原备注'};
   const writes=[],failures=[],rejections=[];let version=0,navigations=0,failNext=false,clientIds=0,proposal=null,documentBoxes=[];const keys=[];
   const context=vm.createContext({structuredClone,Promise,setTimeout(){return 1;},clearTimeout(){},
@@ -30,6 +34,7 @@ class Element{
   vm.runInContext(fs.readFileSync('web/annotations.js','utf8'),context);
   await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);
   assert.equal(el('annotationStatus').textContent,'尚未保存位置补标');
+  assert.equal(el('annotationOverlay').hasAttribute('hidden'),true,'Empty SVG overlay must remain hidden');
   const body=context.document.body;body.matches=()=>false;
   let intercepted=false;
   for(const handler of keys)handler({target:body,key:'Enter',ctrlKey:false,preventDefault(){intercepted=true;},stopImmediatePropagation(){}});
@@ -42,6 +47,8 @@ class Element{
   const start=geometry.screenPoint(.1,.2,view),end=geometry.screenPoint(.4,.6,view);
   await el('photoStage').fire('pointerdown',{clientX:start.x,clientY:start.y,pointerId:1});
   await el('photoStage').fire('pointermove',{clientX:end.x,clientY:end.y,pointerId:1});
+  assert.equal(el('annotationOverlay').hasAttribute('hidden'),false,'Drawing must remove the SVG hidden content attribute');
+  assert.ok(el('annotationOverlay').children.some(node=>node.fill==='#ff453a'&&node['fill-opacity']===.22&&node['stroke-width']===3.5),'Active drawing needs a red border and visible translucent fill');
   await el('photoStage').fire('pointerup',{clientX:end.x,clientY:end.y,pointerId:1});
   failNext=true;
   await assert.rejects(vm.runInContext('AnnotationUI.saveDraft()',context),/模拟断网/);
@@ -65,6 +72,8 @@ class Element{
   assert.equal(el('annotationBar').hidden,false);assert.equal(el('autoBoxProposal').hidden,false);
   assert.equal(el('adoptAutoBoxes').disabled,false);assert.equal(writes.length,beforeProposal,'Showing model proposals must not write a human annotation');
   assert.ok(el('annotationOverlay').children.some(node=>node['stroke-dasharray']==='6 4'));
+  assert.ok(el('annotationOverlay').children.some(node=>node.stroke==='#d58aff'&&node['stroke-dasharray']==='6 4'),'Machine suggestions must be purple dashed boxes');
+  assert.ok(el('annotationOverlay').children.some(node=>node.stroke==='#00e6a0'),'Other human boxes must be green');
   await el('adoptAutoBoxes').fire('click');
   assert.equal(writes.length,beforeProposal,'Adopting a proposal must remain dirty until the debounce or navigation flush');
   context.S.navigating=true;
