@@ -187,7 +187,7 @@ class Annotations:
                 prepared.append((image_id,identity,data,label['data'],replaces))
             except (ValueError,KeyError,TypeError,OSError):
                 skipped+=1
-        imported=0;refreshed=0;withdrawn=0
+        imported=0;refreshed=0;withdrawn=0;imported_ids=[];imported_images=[]
         with self.store.lock,self.store.db:
             self.store.db.execute('BEGIN IMMEDIATE')
             from deployment.snapshot import digest,annotation_digest
@@ -217,11 +217,12 @@ class Annotations:
                     skipped+=1;continue
                 self.store.db.execute('INSERT INTO annotation_proposals(image_id,proposal_id,data,label_data,created_at) VALUES(?,?,?,?,?)',
                     (image_id,identity,json.dumps(data,ensure_ascii=False,separators=(',',':')),label_raw,dt.datetime.now(dt.timezone.utc).isoformat()))
-                imported+=1
+                imported+=1;imported_ids.append(identity);imported_images.append(image_id)
             assert before==digest(self.store.db),'Human classifications changed'
             assert annotations_before==annotation_digest(self.store.db),'Human position annotations changed'
         return {'imported':imported,'refreshed':refreshed,'withdrawn':withdrawn,'skipped':skipped,'human_classifications_unchanged':True,'human_annotations_unchanged':True,
-                'human_digest':before,'annotation_digest':annotations_before}
+                'human_digest':before,'annotation_digest':annotations_before,
+                'imported_proposal_ids':imported_ids,'imported_image_ids':imported_images}
 
     def reject_proposal(self, image_id, proposal_id, feedback=None):
         proposal=self.proposal(image_id,self.source(image_id))

@@ -109,7 +109,9 @@ class DetectorPreparationTests(unittest.TestCase):
             db.executescript('CREATE TABLE settings(key TEXT,value TEXT);INSERT INTO settings VALUES("root","1");'
                 'CREATE TABLE images(id INTEGER,root_id INTEGER,relative_path TEXT,case_id TEXT,available INTEGER);'
                 'CREATE TABLE labels(image_id INTEGER,data TEXT);CREATE TABLE drafts(image_id INTEGER);'
-                'CREATE TABLE annotation_documents(image_id INTEGER,data TEXT,version INTEGER,updated_at TEXT);')
+                'CREATE TABLE annotation_documents(image_id INTEGER,data TEXT,version INTEGER,updated_at TEXT);'
+                'CREATE TABLE annotation_proposals(image_id INTEGER,proposal_id TEXT,data TEXT);'
+                'CREATE TABLE annotation_proposal_history(image_id INTEGER,proposal_id TEXT,data TEXT);')
             rng = np.random.default_rng(123)
             originals = {}
             for i in range(13):
@@ -123,6 +125,18 @@ class DetectorPreparationTests(unittest.TestCase):
                 label = self.label
                 doc = {**self.doc, 'source': {'sha256': originals[path], 'width': 48+i, 'height': 32+i},
                        'boxes': [dict(self.doc['boxes'][0], problem='人工新增框类别')]}
+                if i < 4:
+                    doc.update(proposal_id='p'+str(i), model_id='detector-1', method='yolox',
+                               origin='machine_assisted_human_confirmed')
+                    doc['boxes'][0].update(origin='model', proposal_id=doc['proposal_id'])
+                    proposal = json.loads(json.dumps(doc))
+                    if i != 3:
+                        table = 'annotation_proposal_history' if i == 1 else 'annotation_proposals'
+                        db.execute(f'INSERT INTO {table} VALUES(?,?,?)', (i, doc['proposal_id'], json.dumps(proposal)))
+                    if i == 0:
+                        doc['boxes'][0]['x'] = .65
+                    if i in (1, 3):
+                        doc['boxes'].append({'id': 'h1', 'problem': '人工新增框类别', 'x': .01, 'y': .01, 'w': .1, 'h': .1})
                 if i == 12:
                     doc['source']['sha256'] = 'changed'
                 db.execute('INSERT INTO images VALUES(?,?,?,?,1)', (i, 1, relative, f'case{i}'))
@@ -135,6 +149,14 @@ class DetectorPreparationTests(unittest.TestCase):
             self.assertEqual(len(result['records']), 12)
             self.assertEqual(result['summary']['excluded_reasons'], {'source_hash_mismatch': 1})
             self.assertEqual(result['categories'], [{'id': 0, 'name': '人工新增框类别'}])
+            by_id = {r['image_id']: r for r in result['records']}
+            self.assertTrue(by_id[0]['hard_positive']['is_hard'])
+            self.assertEqual(by_id[1]['hard_positive']['added_box_ids'], ['h1'])
+            self.assertFalse(by_id[2]['hard_positive']['is_hard'])
+            self.assertIsNone(by_id[3]['hard_positive'])
+            practice = result['summary']['human_correction_extra_practice']
+            self.assertTrue(all(by_id[i]['split'] == 'train' for i in practice['extra_image_ids']))
+            self.assertLessEqual(practice['extra_images_per_epoch'], result['summary']['splits']['train']['images']//2)
             self.assertEqual(before, hashlib.sha256(snapshot.read_bytes()).hexdigest())
             self.assertTrue(all(hashlib.sha256(p.read_bytes()).hexdigest() == h for p, h in originals.items()))
             with self.assertRaises(ValueError):

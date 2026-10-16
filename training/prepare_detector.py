@@ -18,6 +18,7 @@ import numpy as np
 from PIL import Image, ImageOps
 
 from vision_classifier import NAS_ROOT, assign_groups, training_exclusion_reason, write_json
+from hard_positive import hard_positive_metadata, hard_positive_repeats, original_proposal
 
 POLICY = 'human_confirmed_problem_boxes_v1'
 COORDINATES = 'exif_transposed_normalized_xywh'
@@ -191,6 +192,13 @@ def prepare(run, snapshot=None, source_root=NAS_ROOT, historical_path=DEFAULT_HI
             'LEFT JOIN drafts d ON d.image_id=i.id WHERE i.root_id=? ORDER BY i.id', (root_id,))]
         label_counts = db.execute('SELECT COUNT(*) FROM labels l JOIN images i ON i.id=l.image_id WHERE i.root_id=?', (root_id,)).fetchone()[0]
         draft_counts = db.execute('SELECT COUNT(*) FROM drafts d JOIN images i ON i.id=d.image_id WHERE i.root_id=?', (root_id,)).fetchone()[0]
+        tables = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        for row in rows:
+            try:
+                document = json.loads(row['annotation_data'])
+                row['original_proposal'] = original_proposal(db, row['image_id'], document.get('proposal_id'), tables)
+            except (ValueError, TypeError, AttributeError):
+                row['original_proposal'] = None
     records, excluded, cases = [], [], {}
     for row in rows:
         try:
@@ -237,6 +245,7 @@ def prepare(run, snapshot=None, source_root=NAS_ROOT, historical_path=DEFAULT_HI
                  'annotation_outcome': 'boxed', 'coordinate_space': COORDINATES,
                  'image_state': label.get('image_state', ''), 'defects': label['defects'], 'has_draft': False,
                  'boxes': boxes, 'proposal_id': document.get('proposal_id'),
+                 'hard_positive': hard_positive_metadata(document, row.get('original_proposal')),
                  'classification_problems_without_boxes': sorted(set(label['defects'])-{b['problem'] for b in boxes})})
         except (OSError, ValueError, KeyError, TypeError) as exc:
             excluded.append({'image_id': row['image_id'], 'reason': str(exc), 'exception_type': type(exc).__name__})
@@ -278,6 +287,7 @@ def prepare(run, snapshot=None, source_root=NAS_ROOT, historical_path=DEFAULT_HI
                'first_detector_training': True,
                'annotation_selection_bias': 'Some human boxes originated from classifier-generated proposals and error review; this is not a random production test set.',
                'training_ready': True, 'evaluation_scope': 'Small-sample held-out human-confirmed boxes only; no general production accuracy claim'}
+    _, summary['human_correction_extra_practice'] = hard_positive_repeats(records)
     feedback = None
     if roi_feedback_paths:
         from roi_feedback import prepare_feedback

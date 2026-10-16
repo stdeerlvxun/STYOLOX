@@ -1,6 +1,6 @@
 {
   "training": {
-    "source_commit": "efdef020c89cec4155345ae574db3290735fcbbd",
+    "source_commit": "1a66745fb60ba57d9b3a5d112f1310e5d5af7de7",
     "files": [
       {
         "path": ".gitignore",
@@ -20,7 +20,7 @@
       },
       {
         "path": "correction_cycle.py",
-        "sha256": "df4a76d4608d93c8e5fc28f05412906a41b0bb4b79b2dd172a8c587c1f8c5b6c"
+        "sha256": "e405a400c2e77eb4b69b42033689c24247b277b95f44cefa69b18c5127933209"
       },
       {
         "path": "export_recommendations.py",
@@ -39,12 +39,16 @@
         "sha256": "6b5ffc6010d80f02f09b5ec83f66d75ec18b32f628dda9794f4e3bc43561af31"
       },
       {
+        "path": "hard_positive.py",
+        "sha256": "e8f015fdede326baa9516bb8d1c9f1b5b67815b80238a4e753a0b15ccebe76f3"
+      },
+      {
         "path": "improve_classifier.py",
         "sha256": "bd53d55592547ac49859a3e6b6b40ad24fb3391880f92a1f19253a358fc73a2e"
       },
       {
         "path": "prepare_detector.py",
-        "sha256": "a8f83ac420c5edf39b281bf16b21127c19c2cfd9e91421a79c3b5a0570d39a79"
+        "sha256": "2cbe52e903eb9e6d46a01c84817542c74119cfab71befa7a40e2fed01b8020ec"
       },
       {
         "path": "recall_classifier.py",
@@ -53,6 +57,10 @@
       {
         "path": "retrain_latest.py",
         "sha256": "b86a55589f07d424951f0d2cba9b6e27b0ae9189cfe81a90b91191f46a7f9c0f"
+      },
+      {
+        "path": "review_refill.py",
+        "sha256": "422c9aacfaffd31fe0fee613f205048b617ba525d90311d9175f3f4782e82f68"
       },
       {
         "path": "roi_feedback.py",
@@ -75,16 +83,24 @@
         "sha256": "172fc371c8eb29ed64db00dadfa171d9e2820136674c6ae22b7d960beeffa780"
       },
       {
+        "path": "test_hard_positive.py",
+        "sha256": "9cc108a48c1dcf19b8d4e249ad44476efd5c70b2ef6184805cc08fb12e6c2afe"
+      },
+      {
         "path": "test_improve_classifier.py",
         "sha256": "1df19832ddaea3c6cde5e79c5fc1fb005c35abbf6a9a78b06cf47df740796194"
       },
       {
         "path": "test_prepare_detector.py",
-        "sha256": "2a86b8e0246d6dbae7c3d01d51c3634101a5df8b80a0dc65403953d7f810fa1f"
+        "sha256": "0d0b0dc8d0cf2cc019a48c50df403f2a6a0f892f6d168c89e2602e9315bf18fe"
       },
       {
         "path": "test_retrain_latest.py",
         "sha256": "e9c903167720f40c304b397758b3af673e46f883405e74fc612bafb1c712594c"
+      },
+      {
+        "path": "test_review_refill.py",
+        "sha256": "aeca0a5127064c4d143db9c2f9c16a1d07a90e1e180c2d853b91d004b4636f1c"
       },
       {
         "path": "test_roi_feedback.py",
@@ -92,7 +108,7 @@
       },
       {
         "path": "test_train_detector.py",
-        "sha256": "6e47f3827e2b39801c034fe8cd079361f9c7a12f7778b714ab83fa2983a3acde"
+        "sha256": "152d1f9e9afbba14c84033468200d76650cf26b0b8893e3d2da935dbd4f9998a"
       },
       {
         "path": "test_unrelated_filter.py",
@@ -100,7 +116,7 @@
       },
       {
         "path": "train_detector.py",
-        "sha256": "d79e51c784ca6ec299b8be39cf930463b10d5e8af4e7fe1e7e8485f24480d74b"
+        "sha256": "15fb631b011a3e266a39467fb77bb31856208db606f6046e8e4d7b3216c2f53e"
       },
       {
         "path": "unrelated_filter.py",
@@ -113,7 +129,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "c06db04280c2948368f10240fcb887c4681164bb",
+    "source_commit": "6090c81e961ea696b65f74b233c9a169e91ae430",
     "files": [
       {
         "path": ".gitignore",
@@ -132,12 +148,16 @@
         "sha256": "fb1ce4f6a99794876d18c2192cf7337d3f1a788c663a7c1cbeea82eaa6bae280"
       },
       {
+        "path": "REVIEW_LOOP.md",
+        "sha256": "cd98a3301472da49c3f2c628967439027933eb4843dfeb32c1d8c9decd739f5d"
+      },
+      {
         "path": "annotations.py",
-        "sha256": "4106ed320bbef52ed464a987b2286b6a0cd1fe21fc561aeeeee389d63d2990b3"
+        "sha256": "08d2a872fd2c1b2f7a5be2266372ea5f191bc4a159b41182bc9ecf5687e86da5"
       },
       {
         "path": "app.py",
-        "sha256": "b0b6627ebce3d51d9ce63c2f179bbf1e3af01101024228bb7858cbc6c1995482"
+        "sha256": "658f4cd7cc57268d86cc165f00b6c858d0b04ce474a99a05545d374bfcd49d55"
       },
       {
         "path": "deployment/enable_recommendations_101.py",
@@ -216,6 +236,14 @@
         "sha256": "1c803ca04270f3acd340ace239b1e86931871344e0070b4f6db9a59ae56336cb"
       },
       {
+        "path": "review_batches.py",
+        "sha256": "2bd8bb64767f494718566a3ad10af861665b62391d9fa4f8881b9176824ebb2e"
+      },
+      {
+        "path": "review_comparison.py",
+        "sha256": "75cd16d1860ffcad1c393eb1bc966b5577ba5765ce93ee47e912b06b6b91f324"
+      },
+      {
         "path": "start.ps1",
         "sha256": "f06cc9131ea27998b801aec79dc55a082f309cca20cbf97fc7578e4eaca137be"
       },
@@ -241,7 +269,7 @@
       },
       {
         "path": "test_box_proposals.py",
-        "sha256": "9120f7ade33f367076ceadb652ace5be8a7d2b36816d513d6a7e13af3807366b"
+        "sha256": "1d47cc79f53e0de1e7e36d75a51dbdc5f06b675d0e1a77b18df1ffc5d3fe817e"
       },
       {
         "path": "test_filter_ui.cjs",
@@ -250,6 +278,22 @@
       {
         "path": "test_recommendations.py",
         "sha256": "9956c2a5ca5fb8b595a2d13a037ceeadd505ef022b991d0064d575b9ff5fe763"
+      },
+      {
+        "path": "test_review_batch_api.py",
+        "sha256": "08176671badc0281062f251bb6322fdfc1f8729d4a547e846a88765006886fa0"
+      },
+      {
+        "path": "test_review_batches.py",
+        "sha256": "f1a9b6b9566b8f663152c31500d766dfc99c31c4a2add157197d2aa2158c96c5"
+      },
+      {
+        "path": "test_review_batches_ui.cjs",
+        "sha256": "1ccad80a0c35a3696854e5e0ca1d6715e6d8d1fe81fb71ae0bb138eb1d3de875"
+      },
+      {
+        "path": "test_review_comparison.py",
+        "sha256": "63125c1956a3e4893ac157f27d07cf5d7f757996fa1d718e75092ef3ad1a92ef"
       },
       {
         "path": "test_rules.cjs",
@@ -261,19 +305,19 @@
       },
       {
         "path": "web/annotations.js",
-        "sha256": "e810edc58785285b7ebe6a5769e6c93f17607f8fd6c06acebedc7d8f3bf1e0d1"
+        "sha256": "62b8b47e48f523bff23942d8151236687d34c806776641ad6a87c9734eb0b718"
       },
       {
         "path": "web/app.js",
-        "sha256": "5116e96357c469e2a1cec2557306deadfe2d88ed33fb5f5f1d05c702af58eb54"
+        "sha256": "c5da12f2b8259b146748193edc9c0d2aecc3f79c212cbffa204a71d68e8206a6"
       },
       {
         "path": "web/index.html",
-        "sha256": "aecaf49326c080ce429e841ecafa8fa7ba05b422b20bd49a13e387609ea27c5d"
+        "sha256": "1f1aef12b491ed32e923cfcbb1bd83e6dc544ebd6a35ca3e66efecd306eddb16"
       },
       {
         "path": "web/style.css",
-        "sha256": "2f5bef70e8a74f3ee7eca5c053c9c8b643f540ae76c6c4bbdf2b68957739b0ac"
+        "sha256": "0b23b2618c08d9096b63ffe72a95ca1714e9945533a9247a538a756d3e9bc2d4"
       },
       {
         "path": "启动分类工具.cmd",

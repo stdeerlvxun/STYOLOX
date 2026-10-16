@@ -187,7 +187,7 @@
     }
   }
   function render(){
-    el('annotationBar').hidden=!A.active||A.quickFlow;el('toggleAnnotations').setAttribute('aria-pressed',String(A.active));
+    el('annotationBar').hidden=!S.current||!A.active||A.quickFlow;el('toggleAnnotations').setAttribute('aria-pressed',String(A.active));
     el('photoStage').classList.toggle('annotating',A.active&&A.draw);
     el('photoStage').classList.toggle('box-editing',A.active&&!A.draw&&!!A.selected);
     const chosen=el('boxProblem').value;el('boxProblem').replaceChildren();

@@ -368,6 +368,14 @@ def execute_cycle(config, config_path, payload, items, run, report):
     if not promote:
         report['status'] = 'trained_not_promoted'
         return report
+    if config.get('review_refill_enabled', False):
+        # The independent refill owns review batches. Existing pending IDs must
+        # remain stable until human review completes, including after promotion.
+        update_config_reference(config_path, config, dataset_path, detector)
+        report.update(status='promoted_awaiting_review_refill', promoted=True,
+                      original_classifications_modified=False, human_boxes_modified=False,
+                      existing_online_classifier_replaced=False)
+        return report
     output = run/'proposals.json'
     run_process([python, root/'generate_detector_proposals.py', '--snapshot', snapshot,
                  '--run', detector, '--output', output, '--source-root', config['source_root'],
@@ -397,7 +405,7 @@ def execute_cycle(config, config_path, payload, items, run, report):
     return report
 
 
-def cycle(config_path, check_only=False):
+def training_cycle(config_path, check_only=False):
     config_path = Path(config_path)
     config = validate_config(read_json(config_path))
     payload = export_feedback(config)
@@ -451,13 +459,41 @@ def cycle(config_path, check_only=False):
     return report
 
 
+def cycle(config_path, check_only=False, refill_only=False):
+    config = validate_config(read_json(config_path))
+    refill = None
+    if config.get('review_refill_enabled', False) or refill_only:
+        from review_refill import refill_cycle
+        try:
+            refill = refill_cycle(config_path, check_only=check_only)
+        except Exception as error:
+            refill = {'status': 'error', 'error': str(error)}
+    if refill_only:
+        return {'status': refill['status'], 'review_refill': refill, 'training_status': 'not_requested'}
+    try:
+        report = training_cycle(config_path, check_only)
+    except Exception as error:
+        if refill is None:
+            raise
+        report = {'status': 'error', 'error': str(error), 'training_completed': False}
+    if refill is not None:
+        report['training_status'] = report['status']
+        report['review_refill'] = refill
+        if report['status'] == 'error' and refill['status'] == 'refilled':
+            report['status'] = 'review_refilled_training_error'
+        if not check_only:
+            atomic_json(Path(config['runs_root'])/'latest-state.json', report)
+    return report
+
+
 if __name__=='__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--check-only', action='store_true')
+    parser.add_argument('--refill-only', action='store_true', help='Only refill review proposals; never start training')
     args = parser.parse_args()
     try:
-        result = cycle(args.config, args.check_only)
+        result = cycle(args.config, args.check_only, args.refill_only)
         print(json.dumps(result, ensure_ascii=False), flush=True)
         sys.exit(1 if result['status']=='error' else 0)
     except Exception as error:

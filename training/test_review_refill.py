@@ -1,0 +1,212 @@
+import copy
+import hashlib
+import json
+from pathlib import Path
+import sqlite3
+import tempfile
+import unittest
+from unittest.mock import patch
+
+from PIL import Image
+import correction_cycle as worker
+import review_refill as refill
+from test_correction_cycle import config
+
+
+class FakeDetector:
+    class_agnostic = False
+
+    def __init__(self, empty=False):
+        self.calls = 0
+        self.empty = empty
+
+    def predict_image(self, image, **_):
+        self.calls += 1
+        return [] if self.empty else [{'problem': '其他破损', 'score': .8, 'xywh': [.1, .1, .2, .2]}]
+
+
+def fixture(root, count=4):
+    value = {**config(root), 'review_refill_enabled': True, 'fixed_threshold': .05}
+    source = Path(value['source_root']); source.mkdir()
+    model = Path(value['current_detector_run']); model.mkdir()
+    (model/'detector.pt').write_bytes(b'verified model')
+    worker.atomic_json(model/'metrics.json', {'model_sha256': hashlib.sha256(b'verified model').hexdigest()})
+    snapshot = root/'snapshot.sqlite3'; db = sqlite3.connect(snapshot)
+    db.executescript('''CREATE TABLE settings(key TEXT,value TEXT);
+        INSERT INTO settings VALUES('root','1');
+        CREATE TABLE images(id INTEGER,relative_path TEXT,sha256 TEXT,reported_at TEXT,size INTEGER,mtime_ns INTEGER,available INTEGER,root_id INTEGER);
+        CREATE TABLE labels(image_id INTEGER,data TEXT);
+        CREATE TABLE drafts(image_id INTEGER);
+        CREATE TABLE annotation_documents(image_id INTEGER);
+        CREATE TABLE annotation_proposals(image_id INTEGER,status TEXT);''')
+    for identity in range(1, count+1):
+        path = source/(str(identity)+'.png'); Image.new('RGB', (20, 20), 'white').save(path); stat = path.stat()
+        db.execute('INSERT INTO images VALUES(?,?,?,?,?,?,?,?)',
+            (identity, path.name, None, '2026-10-'+str(identity).zfill(2), stat.st_size, stat.st_mtime_ns, 1, 1))
+        db.execute('INSERT INTO labels VALUES(?,?)', (identity, json.dumps({'defects': ['崩边'], 'image_state': 'defect'})))
+    db.commit(); db.close()
+    return value, snapshot
+
+
+class RefillTests(unittest.TestCase):
+    def test_eligible_policy_preserves_drafts_boxes_and_all_proposal_statuses(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value, snapshot = fixture(root, 10)
+            db = sqlite3.connect(snapshot)
+            db.execute('INSERT INTO drafts VALUES(1)'); db.execute('INSERT INTO annotation_documents VALUES(2)')
+            for identity, status in ((3, 'pending'), (4, 'accepted'), (5, 'rejected'), (6, 'stale')):
+                db.execute('INSERT INTO annotation_proposals VALUES(?,?)', (identity, status))
+            db.execute('UPDATE labels SET data=? WHERE image_id=7', (json.dumps({'defects': ['崩边'], 'image_state': 'unclear'}),))
+            db.execute('UPDATE images SET available=0 WHERE id=8'); db.commit(); db.close()
+            rows, summary = refill.select_refill_rows(snapshot)
+            self.assertEqual([row['image_id'] for row in rows], [10, 9])
+            self.assertEqual(summary['excluded']['existing_machine_proposal'], 4)
+            self.assertEqual(summary['excluded']['image_state_selected'], 1)
+
+    def test_bounded_newest_first_generation_and_original_problem_context(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value, snapshot = fixture(root, 7)
+            value.update(review_refill_batch_size=2, review_refill_scan_limit=4)
+            detector = FakeDetector()
+            result = refill.generate(value, snapshot, root/'output.json', root/'attempts.json', detector)
+            self.assertEqual([row['image_id'] for row in result['items']], [7, 6])
+            self.assertEqual(result['items'][0]['boxes'][0]['problem'], '崩边', 'Existing single human problem is retained in location-first mode')
+            self.assertEqual(result['summary']['attempted_images'], 2)
+            self.assertEqual(result['summary']['remaining_eligible_images'], 5)
+            self.assertFalse(result['refresh_pending']); self.assertTrue(result['requires_human_review'])
+
+    def test_empty_predictions_are_not_retried_until_label_source_or_model_changes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value, snapshot = fixture(root, 1); detector = FakeDetector(empty=True)
+            state = root/'attempts.json'
+            first = refill.generate(value, snapshot, root/'one.json', state, detector)
+            second = refill.generate(value, snapshot, root/'two.json', state, detector)
+            self.assertEqual(first['summary']['images_without_boxes'], 1)
+            self.assertEqual(second['summary']['attempted_images'], 0); self.assertEqual(detector.calls, 1)
+            db = sqlite3.connect(snapshot); db.execute('UPDATE images SET mtime_ns=mtime_ns+1'); db.commit(); db.close()
+            refill.generate(value, snapshot, root/'three.json', state, detector); self.assertEqual(detector.calls, 2)
+            db = sqlite3.connect(snapshot); db.execute('UPDATE labels SET data=?', (json.dumps({'defects': ['划伤']}),)); db.commit(); db.close()
+            refill.generate(value, snapshot, root/'four.json', state, detector); self.assertEqual(detector.calls, 3)
+            model = Path(value['current_detector_run']); (model/'detector.pt').write_bytes(b'new verified model')
+            worker.atomic_json(model/'metrics.json', {'model_sha256': hashlib.sha256(b'new verified model').hexdigest()})
+            refill.generate(value, snapshot, root/'five.json', state, detector); self.assertEqual(detector.calls, 4)
+
+    def test_scan_limit_and_multilabel_abstention_are_explicit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value, snapshot = fixture(root, 8); detector = FakeDetector(empty=True)
+            value.update(review_refill_batch_size=2, review_refill_scan_limit=3)
+            db = sqlite3.connect(snapshot); db.execute('UPDATE labels SET data=? WHERE image_id=8', (json.dumps({'defects': ['崩边', '划伤']}),)); db.commit(); db.close()
+            result = refill.generate(value, snapshot, root/'output.json', root/'attempts.json', detector)
+            self.assertEqual(result['summary']['eligible_images'], 8)
+            self.assertEqual(result['summary']['eligible_for_current_model'], 7)
+            self.assertEqual(result['summary']['attempted_images'], 3)
+            self.assertEqual(result['summary']['remaining_eligible_images'], 4)
+
+    def test_enough_pending_never_queries_gpu_or_runs_inference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value = {**config(root), 'review_refill_enabled': True}; path = root/'config.json'; worker.atomic_json(path, value)
+            with patch.object(refill, 'api', return_value={'pending': 10}), patch.object(refill, 'publish_status'), \
+                 patch.object(worker, 'gpu_available', side_effect=AssertionError('GPU queried')), \
+                 patch.object(worker, 'run_process', side_effect=AssertionError('inference')):
+                result = refill.refill_cycle(path)
+            self.assertEqual(result['status'], 'queue_sufficient')
+
+    def test_busy_gpu_and_training_lock_wait_without_inference(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value = {**config(root), 'review_refill_enabled': True}; path = root/'config.json'; worker.atomic_json(path, value)
+            with patch.object(refill, 'api', return_value={'pending': 0}), patch.object(refill, 'publish_status'), \
+                 patch.object(worker, 'gpu_available', return_value=(False, 'compute busy')), \
+                 patch.object(worker, 'run_process', side_effect=AssertionError('inference')):
+                self.assertEqual(refill.refill_cycle(path)['status'], 'waiting_for_gpu')
+            with worker.ExclusiveLock(Path(value['runs_root'])/'.correction-cycle.lock'), patch.object(refill, 'publish_status'), \
+                 patch.object(worker, 'gpu_available', side_effect=AssertionError('GPU queried')):
+                self.assertEqual(refill.refill_cycle(path)['status'], 'waiting_for_worker')
+
+    def test_check_only_does_not_create_files_or_query_gpu(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value = {**config(root), 'review_refill_enabled': True}; path = root/'config.json'; worker.atomic_json(path, value)
+            with patch.object(refill, 'api', return_value={'pending': 0}), \
+                 patch.object(worker, 'gpu_available', side_effect=AssertionError('GPU queried')):
+                self.assertEqual(refill.refill_cycle(path, check_only=True)['status'], 'checked')
+            self.assertFalse(Path(value['runs_root']).exists())
+
+    def test_registration_retry_does_not_repeat_inference_or_import(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value = {**config(root), 'review_refill_enabled': True}; path = root/'config.json'; worker.atomic_json(path, value)
+            state_path = Path(value['runs_root'])/'review-refill-state.json'
+            worker.atomic_json(state_path, {'pending_registration': {'batch_id': 'refill-test', 'proposal_ids': ['one'],
+                'metadata': {'source_model': 'verified'}, 'summary': {'generated_images': 1, 'generated_boxes': 2, 'eligible_images': 3, 'attempted_images': 1}, 'import': {'imported': 1}}})
+            calls = []
+            def endpoint(_, route, body=None):
+                calls.append(route)
+                if route.endswith('/register') and calls.count(route) == 1:
+                    raise RuntimeError('temporary registration outage')
+                return {'pending': 1}
+            with patch.object(refill, 'api', side_effect=endpoint), patch.object(refill, 'publish_status'), \
+                 patch.object(worker, 'gpu_available', side_effect=AssertionError('GPU queried')), \
+                 patch.object(worker, 'ssh', side_effect=AssertionError('Import repeated')):
+                self.assertEqual(refill.refill_cycle(path)['status'], 'error')
+                self.assertIn('pending_registration', worker.read_json(state_path))
+                second = refill.refill_cycle(path)
+                self.assertEqual(second['status'], 'refilled'); self.assertEqual(second['imported_images'], 1)
+            self.assertNotIn('pending_registration', worker.read_json(state_path))
+
+    def test_full_refill_registers_only_actual_inserted_ids_and_never_refreshes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value = {**config(root), 'review_refill_enabled': True}; path = root/'config.json'; worker.atomic_json(path, value)
+            requests = []; generated = []
+            def endpoint(_, route, body=None):
+                requests.append((route, body))
+                return {'pending': 0 if len(requests) == 1 else 1}
+            def process(arguments, **_):
+                arguments = list(map(str, arguments)); generated.append(arguments)
+                self.assertIn('--infer', arguments)
+                manifest = Path(arguments[arguments.index('--output')+1])
+                worker.atomic_json(manifest, {'source_checkpoint_sha256': 'verified', 'model_id': 'location-verified',
+                    'created_at': '2026-10-16T12:00:00Z', 'refresh_pending': False,
+                    'items': [{'image_id': 1, 'boxes': [{}]}, {'image_id': 2, 'boxes': [{}]}],
+                    'summary': {'eligible_images': 7, 'remaining_eligible_images': 5,
+                                'attempted_images': 2, 'generated_images': 2, 'generated_boxes': 2}})
+                return ''
+            def remote(_, arguments, **__):
+                if '-c' in arguments:
+                    return json.dumps({'imported': 1, 'skipped': 1, 'imported_proposal_ids': ['actually-inserted'],
+                        'human_data_unchanged': True, 'annotation_data_unchanged': True})
+                return ''
+            with patch.object(refill, 'api', side_effect=endpoint), patch.object(refill, 'publish_status'), \
+                 patch.object(worker, 'gpu_available', return_value=(True, 'available')), \
+                 patch.object(worker, 'run_process', side_effect=process), patch.object(worker, 'ssh', side_effect=remote), \
+                 patch.object(worker, 'transfer'):
+                result = refill.refill_cycle(path)
+            self.assertEqual(result['status'], 'refilled'); self.assertEqual(result['imported_images'], 1)
+            self.assertEqual(result['eligible_images'], 5); self.assertEqual(len(generated), 1)
+            registration = [body for route, body in requests if route.endswith('/register')]
+            self.assertEqual(registration[0]['proposal_ids'], ['actually-inserted'])
+            self.assertEqual(worker.read_json(Path(value['runs_root'])/'review-refill-state.json'), {})
+
+    def test_refill_only_never_starts_training_and_training_error_preserves_refill_success(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value = {**config(root), 'review_refill_enabled': True}; path = root/'config.json'; worker.atomic_json(path, value)
+            with patch.object(refill, 'refill_cycle', return_value={'status': 'refilled', 'imported_images': 2}), \
+                 patch.object(worker, 'training_cycle', side_effect=RuntimeError('training failed')) as training:
+                only = worker.cycle(path, refill_only=True); training.assert_not_called()
+                self.assertEqual(only['training_status'], 'not_requested')
+                combined = worker.cycle(path)
+            self.assertEqual(combined['status'], 'review_refilled_training_error')
+            self.assertEqual(combined['training_status'], 'error')
+            self.assertEqual(combined['review_refill']['status'], 'refilled')
+
+    def test_hard_limits_and_changed_checkpoint_fail_closed(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value, snapshot = fixture(root, 1)
+            for key, bad in (('review_refill_batch_size', 51), ('review_refill_scan_limit', 201), ('review_refill_enabled', 1)):
+                changed = copy.deepcopy(value); changed[key] = bad
+                with self.assertRaises(ValueError):
+                    refill.settings(changed)
+            (Path(value['current_detector_run'])/'detector.pt').write_bytes(b'modified without validation')
+            with self.assertRaisesRegex(ValueError, 'validated model metadata'):
+                refill.generate(value, snapshot, root/'output.json', root/'attempts.json', FakeDetector())
+
+
+if __name__ == '__main__':
+    unittest.main()

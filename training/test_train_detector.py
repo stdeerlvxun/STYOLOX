@@ -35,7 +35,8 @@ class DetectorMetricsTests(unittest.TestCase):
 
     def test_location_only_training_view_preserves_original_human_classes(self):
         box = {'class_id': 3, 'problem': '崩边', 'xyxy': [1, 2, 3, 4]}
-        dataset = {'records': [{'boxes': [box], 'split': 'test', 'image_state': ''}],
+        dataset = {'records': [{'boxes': [box], 'split': 'test', 'image_state': '',
+                    'hard_positive': {'policy': 'example', 'moved_boxes': [{'box_id': 'b1'}]}}],
                    'negative_feedback_records': [{'boxes': [box]}]}
         categories, records, feedback = location_training_records(dataset)
         self.assertEqual(categories, [{'id': 0, 'name': '问题位置'}])
@@ -44,6 +45,7 @@ class DetectorMetricsTests(unittest.TestCase):
         self.assertEqual(feedback[0]['boxes'][0]['original_class_id'], 3)
         self.assertEqual(dataset['records'][0]['boxes'][0]['class_id'], 3)
         self.assertEqual(records[0]['split'], 'test')
+        self.assertEqual(records[0]['hard_positive'], dataset['records'][0]['hard_positive'])
 
     def box(self, kind=0, coordinates=None, score=.9):
         return {'class_id': kind, 'xyxy': coordinates or [0, 0, 10, 10], 'score': score}

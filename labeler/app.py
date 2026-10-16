@@ -712,6 +712,10 @@ class Application:
         self.store = Store(data_dir)
         if initial_root or not self.store.current_root():
             self.store.set_root(self.paths.server(initial_root or DEFAULT_ROOT))
+        from review_batches import ReviewBatches
+        self.review_batches = ReviewBatches(self.store)
+        self.review_batches.register('legacy-'+dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%S%fZ'),
+                                     metadata={'source':'existing_pending'})
         self.scanner = Scanner(self.store)
         self.images = ImageQueue(self.store)
         from recommendations import Recommendations
@@ -733,11 +737,35 @@ class Application:
                 "annotation_counts": self.store.one('SELECT COUNT(*) documents,SUM(json_extract(a.data,\'$.status\')=\'confirmed\') confirmed '
                     'FROM annotation_documents a JOIN images i ON i.id=a.image_id WHERE i.root_id=?',(root['id'],)),
                 "annotation_proposal_counts":self.store.annotations.proposal_state(),
+                "review_batches":self.review_state(),
                 "error_review_counts": self.store.one("SELECT COUNT(*) total,SUM(e.status='pending') pending FROM error_reviews e JOIN images i "
                     "ON i.id=e.image_id WHERE i.root_id=? AND e.run_id=(SELECT value FROM settings WHERE key='error_review_run')",(root['id'],)),
                 "recommendations": self.recommendations.state(),
                 "model_review": self.store.review_counts(),
                 "server_mode": bool(self.paths.nas_root), "sort": "reported_at_desc"}
+
+    def review_state(self):
+        self.review_batches.sync()
+        state = self.review_batches.state()
+        row = self.store.one('SELECT value FROM settings WHERE key=?', ('review_refill_worker:'+str(self.store.current_root()['id']),))
+        state['worker'] = json.loads(row['value']) if row else {'enabled':False,'status':'not_configured'}
+        return state
+
+    def update_review_worker(self, body):
+        allowed = {'status','detail','pending','generated_images','generated_boxes','eligible_images',
+                   'attempted_images','batch_id','enabled','low_water','batch_size'}
+        if not isinstance(body,dict) or set(body)-allowed:raise ValueError('自动续批状态格式不正确')
+        value = {key:body[key] for key in body}
+        for key in allowed-{'status','detail','batch_id','enabled'}:
+            if key in value and (type(value[key]) is not int or not 0<=value[key]<=1000000):raise ValueError('自动续批计数不正确')
+        for key in ('status','detail','batch_id'):
+            if key in value and (not isinstance(value[key],str) or len(value[key])>1000):raise ValueError('自动续批说明不正确')
+        if 'enabled' in value and type(value['enabled']) is not bool:raise ValueError('自动续批开关不正确')
+        value['checked_at']=now()
+        with self.store.lock,self.store.db:
+            self.store.db.execute('INSERT OR REPLACE INTO settings(key,value) VALUES(?,?)',
+                ('review_refill_worker:'+str(self.store.current_root()['id']),dumps(value)))
+        return {'saved':True}
 
     def context(self, image_id):
         record = self.store.image(image_id)
@@ -894,6 +922,11 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(self.app.store.annotations.export(),headers={'Content-Disposition':'attachment; filename="problem-localizations.json"'})
             if path == '/api/annotation-proposals/state':
                 return self.send(self.app.store.annotations.proposal_state())
+            if path == '/api/review-batches/state':
+                return self.send(self.app.review_state())
+            if path == '/api/review-batches/archive':
+                content=self.app.review_batches.archive_content(params.get('batch',[''])[0])
+                return self.send(content.encode('utf-8'),headers={'Content-Disposition':'attachment; filename="review-archive.json"'})
             if path == '/api/annotation-feedback/state':
                 return self.send(self.app.store.annotations.feedback_state())
             if path == '/api/annotation-feedback/export':
@@ -954,6 +987,10 @@ class Handler(BaseHTTPRequestHandler):
                 result = store.commit([(int(body["id"]), body["label"])], only_unclassified=bool(body.get("only_unclassified")), expected_draft=body.get("expected_draft"), review_run=body.get('review_run'))
             elif path == '/api/annotations':
                 result = store.annotations.save(int(body['id']),body)
+            elif path == '/api/review-batches/register':
+                result = self.app.review_batches.register(body['batch_id'],body.get('proposal_ids'),body.get('metadata'))
+            elif path == '/api/review-batches/worker':
+                result = self.app.update_review_worker(body)
             elif path == '/api/annotation-proposals/reject':
                 result=store.annotations.reject_proposal(int(body['id']),body['proposal_id'],body)
             elif path == '/api/annotation-feedback':

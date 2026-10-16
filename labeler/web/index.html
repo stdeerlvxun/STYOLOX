@@ -37,6 +37,7 @@
           <button data-status="annotation_pending" aria-pressed="false" title="已有问题点，尚待补充问题位置">待补框</button>
           <button data-status="annotated" aria-pressed="false" title="查看已有位置补标">已补框</button>
         </div>
+        <div id="reviewBatchSummary" class="review-batch-summary" hidden><div><span id="reviewBatchProgress">等待审核批次</span><button id="reviewBatchArchiveToggle" class="text-button" aria-controls="reviewArchivePanel" aria-expanded="false">审核归档</button></div><p id="reviewBatchWorkerStatus" role="status"></p></div>
         <details id="statusDetails" class="status-details"><summary><span id="statusMoreLabel">更多筛选</span></summary>
           <label class="sr-only" for="statusFilter">更多图片状态</label>
           <select id="statusFilter"><optgroup label="常用任务"><option value="unclassified">待分类 · 跳过模型待审核</option><option value="auto_boxes">待我审核 · 自动框</option><option value="annotation_pending">待补框 · 已有问题点</option><option value="annotated">已有位置补标</option></optgroup><optgroup label="复核与其他状态"><option value="error_review">错例待复核 / 补标</option><option value="error_reviewed">本轮错例已复核</option><option value="model_unrelated">模型判定无关 · 待审核</option><option value="all_unclassified">所有未分类 · 含模型待审核</option><option value="all">全部图片</option><option value="classified">已分类</option><option value="unrelated">已确认无关图片</option><option value="normal">已确认无可见破损</option><option value="pending">责任待核 / 看不清</option><option value="unavailable">源文件不可用</option></optgroup></select>
@@ -116,6 +117,13 @@
       </div>
     </aside>
   </main>
+  <section id="reviewArchivePanel" class="review-archive-panel" role="dialog" aria-labelledby="reviewArchiveTitle" hidden>
+    <div class="review-archive-heading"><h2 id="reviewArchiveTitle">审核批次与归档</h2><button id="reviewArchiveClose" class="text-button">收起</button></div>
+    <p id="reviewArchiveWorker" class="small" role="status"></p><p id="reviewArchiveSummary" class="small muted"></p>
+    <div id="reviewArchiveList" class="review-archive-list"></div>
+    <div class="review-archive-pages"><button id="reviewArchivePrevious" aria-label="上一页审核批次">上一页</button><span id="reviewArchivePage">1 / 1</span><button id="reviewArchiveNext" aria-label="下一页审核批次">下一页</button></div>
+    <p class="small muted">差异分析随 JSON 保存；原图仍保留在原目录。</p>
+  </section>
   <footer class="workspace-actions" aria-label="图片固定操作栏">
     <div class="workspace-action-tools"><button id="workspacePrevious" title="上一张（左方向键）">上一张</button><button id="undo" title="撤销上次分类确认（Ctrl Z）">撤销确认 <kbd>Ctrl Z</kbd></button><button id="imageStateToggle" aria-controls="labelPanel" aria-expanded="false">图片状态</button><button id="labelPanelToggle" aria-controls="labelPanel" aria-expanded="false">图片信息 / 分类</button></div>
     <span id="saveStatus" role="status">未选择图片</span><button id="workspaceCommit" class="primary" disabled>保存整图并下一张 <kbd>Enter</kbd></button>

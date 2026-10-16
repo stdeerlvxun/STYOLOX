@@ -22,6 +22,7 @@ from PIL import Image, ImageOps
 import torch
 
 from roi_feedback import anchor_centers, region_objectness_loss, transform_rois
+from hard_positive import hard_positive_repeats
 
 YOLOX_SOURCE = Path(r'D:\视觉检测工作区\runtime\YOLOX-6ddff4824372')
 COCO_WEIGHTS = Path(r'D:\视觉检测工作区\models\YOLOX-s\yolox_s.pth')
@@ -342,6 +343,7 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
             raise ValueError('Normal ROI feedback must be explicitly sourced train-only auxiliary supervision')
         if record.get('has_draft') or record.get('image_state') not in (None, '', 'defect') or not record.get('defects'):
             raise ValueError('Normal ROI feedback image violates unchanged classification exclusions')
+    hard_positive_records, config['human_correction_extra_practice'] = hard_positive_repeats(splits['train'])
     torch.set_num_threads(2)
     random.seed(config['seed'])
     np.random.seed(config['seed'])
@@ -422,7 +424,7 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
         else:
             model.backbone.eval()
         model.head.use_l1 = epoch >= 20
-        order = list(splits['train']) + feedback_records
+        order = list(splits['train']) + hard_positive_records + feedback_records
         random.shuffle(order)
         losses = []
         for offset in range(0, len(order), batch_size):
@@ -453,7 +455,8 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
             optimizer.step()
             losses.append(float(loss.detach()))
         epoch_log = {'epoch': epoch, 'loss': sum(losses)/len(losses),
-                     'seconds': time.monotonic()-epoch_started}
+                     'seconds': time.monotonic()-epoch_started,
+                     'hard_positive_extra_images': len(hard_positive_records)}
         reached_budget = time.monotonic()-train_started >= seconds
         if epoch == 1 or epoch % 5 == 0 or epoch == epochs or reached_budget:
             model.eval()
@@ -523,6 +526,8 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
                'untrained_issue_head_baseline_test': baseline,
                'initialization_baseline_test': baseline,
                'human_normal_roi_feedback': config['human_normal_roi_feedback'],
+               'human_correction_extra_practice': {**config['human_correction_extra_practice'],
+                   'completed_extra_positive_exposures': len(hard_positive_records)*epoch},
                'limitations': ['Small order-grouped test set: exploratory only',
                               'No image-state negatives or unclear images enter training; explicit local normal ROI feedback is auxiliary and never an entire-image label',
                               'False positives are relative to reviewed boxes; unmarked real issues may exist',

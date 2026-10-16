@@ -99,6 +99,28 @@
 .workspace-v2 .common-status-filters button[aria-pressed="true"]{background:#245bd6;border-color:#245bd6;color:#fff;font-weight:600}
 .workspace-v2 .common-status-filters button[aria-pressed="true"]:hover{background:#174abd;border-color:#174abd;color:#fff}
 .workspace-v2 #search{font-size:13px;min-height:36px}
+.review-batch-summary{min-width:0;padding:6px 8px;border:1px solid #dce3ed;border-radius:6px;background:#f6f8fc}
+.review-batch-summary>div{display:flex;align-items:center;justify-content:space-between;gap:4px}
+.review-batch-summary #reviewBatchProgress{font-size:12px;color:#33445c;white-space:nowrap}
+.review-batch-summary .text-button{min-height:22px;padding:1px 2px;font-size:12px;white-space:nowrap}
+.review-batch-summary>p{min-width:0;font-size:11px;line-height:18px;color:#536174;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.review-batch-summary>p[data-tone="error"]{color:var(--danger)}
+.review-archive-panel{position:fixed;left:264px;top:112px;z-index:50;width:min(470px,calc(100vw - 32px));max-height:calc(100dvh - 190px);display:grid;gap:10px;padding:14px;background:#fff;border:1px solid #b8c6d9;border-radius:9px;box-shadow:0 8px 28px #17212e33;overflow:auto}
+.review-archive-heading{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-bottom:7px;border-bottom:1px solid var(--line)}
+.review-archive-heading h2{font-size:15px}
+#reviewArchiveWorker{max-height:58px;display:-webkit-box;-webkit-line-clamp:3;-webkit-box-orient:vertical;overflow:hidden}
+.review-archive-list{display:grid;gap:6px}
+.review-archive-row{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:4px 10px;padding:8px 10px;background:#f7f9fc;border:1px solid #e0e6ef;border-radius:6px}
+.review-archive-row strong{min-width:0;font-size:12px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.review-archive-row p{grid-column:1;font-size:12px;line-height:18px;color:#536174}
+.review-archive-row a{grid-column:2;grid-row:1/span 2;align-self:center;color:var(--accent);font-size:12px;white-space:nowrap;text-decoration:none;padding:6px;border:1px solid #b6c7e8;border-radius:5px;background:#fff}
+.review-archive-row a:hover{background:#edf3ff}
+.review-archive-pages{display:flex;align-items:center;justify-content:flex-end;gap:10px}
+.review-archive-pages button{height:30px;min-height:30px;font-size:12px;padding:3px 8px}
+.review-archive-pages span{font-size:12px;font-variant-numeric:tabular-nums}
+@media(max-width:1099px){.review-archive-panel{left:226px}}
+@media(max-width:679px){.review-archive-panel{left:8px;top:100px;width:calc(100vw - 16px)}}
+@media(max-height:720px){.review-archive-panel{top:82px;max-height:calc(100dvh - 150px);gap:7px;padding:12px}.review-archive-row{padding:6px 8px}}
 .workspace-v2 .status-details summary,.workspace-v2 #filterDetails>summary{font-size:13px;padding:5px 0}
 .workspace-v2 .thumb-viewport{min-height:0}
 .workspace-v2 .viewer-toolbar{min-height:47px;padding:7px 14px;flex-wrap:nowrap}

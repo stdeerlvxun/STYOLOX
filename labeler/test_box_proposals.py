@@ -65,6 +65,8 @@ class BoxProposalTest(unittest.TestCase):
         result = self.store.annotations.install_proposals(self.manifest())
         self.assertEqual(result['imported'], 1)
         self.assertEqual(result['skipped'], 0)
+        self.assertEqual(result['imported_image_ids'],[self.id])
+        self.assertEqual(result['imported_proposal_ids'],[self.store.one('SELECT proposal_id FROM annotation_proposals WHERE image_id=?',(self.id,))['proposal_id']])
         return self.store.annotations.detail(self.id)['proposal']
 
     def payload(self, proposal=None, status='confirmed'):
