@@ -1,6 +1,6 @@
 {
   "training": {
-    "source_commit": "df6b736591b6f56be3989e90d8f5f75f3e6e14c9",
+    "source_commit": "fed37d17f6e4ed0ac1b6ef1cf86f85a34197ce9d",
     "files": [
       {
         "path": ".gitignore",
@@ -9,6 +9,10 @@
       {
         "path": "AUTO_BOX_PROPOSALS.md",
         "sha256": "efee3c31d74e5305df0975195fadc47068e3ac8a7d7d29000aca82d01a9355e7"
+      },
+      {
+        "path": "DETECTOR_TRAINING.md",
+        "sha256": "0f1b87749d4cd9e521746a172f36d59b9dad280859fe577e8119d365db9c1bce"
       },
       {
         "path": "README.md",
@@ -27,8 +31,16 @@
         "sha256": "59fa34a2fb6d73b647996977584364eb093c68ae81b5f67c236c5b5c14a7598e"
       },
       {
+        "path": "generate_detector_proposals.py",
+        "sha256": "ac68fad9c8760816d1cb14014538faf4ec6cacf0fff9e7478e42b3ce9c63f318"
+      },
+      {
         "path": "improve_classifier.py",
         "sha256": "bd53d55592547ac49859a3e6b6b40ad24fb3391880f92a1f19253a358fc73a2e"
+      },
+      {
+        "path": "prepare_detector.py",
+        "sha256": "9bb830338c17c0ffd5c22b162a84ff2841b1e49072f337f7124bd818694cd5a6"
       },
       {
         "path": "recall_classifier.py",
@@ -47,16 +59,32 @@
         "sha256": "1e5ce23e79e0b143f7fbc778889a612a794df4ff0e520c187a93253b4ff2ca0b"
       },
       {
+        "path": "test_detector_proposals.py",
+        "sha256": "d857095815696f968542aea4547ecf54fdb73dc17de03638a229085fb9780477"
+      },
+      {
         "path": "test_improve_classifier.py",
         "sha256": "1df19832ddaea3c6cde5e79c5fc1fb005c35abbf6a9a78b06cf47df740796194"
+      },
+      {
+        "path": "test_prepare_detector.py",
+        "sha256": "e6b92f29e84a93e1f8df93de0e965b93cdb5c2aca5048bc0c0ee8d853af660af"
       },
       {
         "path": "test_retrain_latest.py",
         "sha256": "e9c903167720f40c304b397758b3af673e46f883405e74fc612bafb1c712594c"
       },
       {
+        "path": "test_train_detector.py",
+        "sha256": "b4a731d7d385cca5acd5d2b7e5a018e3da150c1f5fa7f3462899dd42d9ff0428"
+      },
+      {
         "path": "test_unrelated_filter.py",
         "sha256": "dd98b18d294b48a3d5e50cda8529f8ba3a692abc0502b156ff1fcf8f457604f0"
+      },
+      {
+        "path": "train_detector.py",
+        "sha256": "e692a238b3a09ca776bad8fe06cec32719e07e5fa4a4374edbd3854c2ae78afc"
       },
       {
         "path": "unrelated_filter.py",
@@ -69,7 +97,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "8f131dd9a08444fab03ba402d46309953ed8c4ef",
+    "source_commit": "77fd85711725324aaa68a65f2a1f78f375ae0894",
     "files": [
       {
         "path": ".gitignore",
@@ -142,6 +170,10 @@
       {
         "path": "deployment/verify_box_proposals.py",
         "sha256": "efad087210a71c0046da1991854757c6380851896bb27aaced1df2b6f5d580e7"
+      },
+      {
+        "path": "deployment/verify_detector_proposals.py",
+        "sha256": "68d24642819917310ddaeefe184507e2149312a3d657374485522ee858445c5a"
       },
       {
         "path": "deployment/verify_recommendations.py",

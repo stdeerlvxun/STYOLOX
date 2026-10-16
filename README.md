@@ -3,36 +3,41 @@
 原图原位浏览、多问题点分类、错例复核、位置框选，以及本地模型训练代码。
 当前目标是先找全问题，责任作为后续人工确认的业务关联。
 
-2026-10-16 15:39 更新：101 已启用“自动框 · 待审核”，首批导入 107 张、119 个粗定位候选框。
-可显式采用后移动、缩放、改类、删框并确认；候选与人工记录分开，2201 条分类、6 条草稿和原模型保留。
-当前是分类模型解释性粗定位，仍会偏向背景/文字，尚无位置准确率；未审核候选不能进入训练。
-见 [使用与验证](docs/auto-boxes-20261016.md) 和 [生成器说明](training/AUTO_BOX_PROPOSALS.md)。
+## 当前状态（2026-10-16 16:38，中国时间）
 
-2026-10-16 15:25 更新：已修复右侧分类确认不更新错例复核状态的问题，并按实际确认历史
-恢复 90 张已复核状态（待复核 0）。2201 条人工分类、6 条草稿及线上原模型保留。
-本次未新增位置框；下方 15:02 的训练条件检查属于此前快照。
-保存流程说明见 [修复记录](docs/review-save-fix-20261016.md)。
+已用人工审核的位置框完成两轮 YOLOX 训练：**46 张图片、54 个框、9 类问题**，
+按订单及重复图片分组为训练 / 验证 / 测试 **36 / 6 / 4 张**。
+最终模型只依据验证集选择第 30 轮、阈值 0.05。测试集 4 个框中找回 **2 个、漏 2 个**，
+漏检均为崩边，另有 **11 个额外候选**。测试集仅覆盖 3 类，其余 6 类无测试正例。
+这是小样本探索结果，不代表总体准确率，模型尚不稳定，保留原线上分类模型。
 
-## 当前状态（2026-10-16 15:02，中国时间）
+新模型已向 101 导入 **82 张图片、135 个待审核候选框**；加上原有 29 张，当前待审核共 111 张。
+候选未确认前不参与训练。采用候选后可移动、缩放、改类和删框，最后点击 **“保存补标并下一张”**。
+**2201 条人工分类、46 条分类草稿、56 份位置文档（48 份已确认）均保留**，导入前后摘要一致。
 
-101 的一致性备份包含 **2200 条人工分类、6 条分类草稿**。
-`annotation_documents` 和 `annotation_history` 均为 **0 条**，所以尚无人工确认的位置框，
-**本轮没有启动 YOLOX 缺陷检测训练，也没有可报告的检测找回数或漏检数**。
-图片级标签不能当成局部位置框；未用自动生成的框冒充人工标注。
+[进入自动框审核](http://192.168.0.101:8878/?status=auto_boxes) ·
+[本轮结果与验证](docs/yolox-human-boxes-20261016.md) ·
+[位置检测训练说明](training/DETECTOR_TRAINING.md)
 
-现有 YOLOX 环境已准备好，线上仍使用原来的 ConvNeXt 多标签问题建议模型。
-本次只读取 101 在线备份并上传代码，没有更换服务、模型或写入人工分类。
-汇总见 [检查报告](docs/yolox-readiness-20261016.md)。
+本轮通过隔离数据导入、草稿排除、显式确认及线上 API / 只读数据库核验；没有部署运行时代码，
+没有替换原模型，尚未完成本轮浏览器视觉验收。
+
+## 历史记录
+
+以下时间点为此前快照，不能作为当前数据和训练状态：
+
+- 15:39：[首批分类解释性粗定位与待审核队列](docs/auto-boxes-20261016.md)。
+- 15:25：[分类确认与错例复核保存修复](docs/review-save-fix-20261016.md)。
+- 15:02：[当时尚无人工位置框的训练条件检查](docs/yolox-readiness-20261016.md)。
 
 ## 目录
 
 - `labeler/`：分类网页、错例复核、多框补标、独立补标存储、建议推理与部署脚本。
-- `training/`：现有图片级分类训练、分组隔离、无关图片辅助模型与 ONNX 导出。
+- `training/`：图片级分类、无关图片辅助模型与 ONNX 导出，以及人工确认框的 YOLOX 数据准备、训练和待审核候选生成。
 - `tools/audit_annotations.py`：只读位置标注检查，不训练、不连接线上服务。
 - `tests/`：检查工具的筛选规则验证。
 - `source-provenance.json`：导入源代码的提交及各文件 SHA-256。
 
-**`training/` 当前是图片级分类代码，不是已完成的 YOLOX 位置检测训练器。**
 第三方 YOLOX 源码、权重、原图、订单 JSON、标签数据库、业务凭据均不包含在本仓库。
 两个原项目目录继续保留；本仓库是本次整合发布的代码快照。
 
@@ -52,12 +57,11 @@
 
 ## 本地使用
 
-已有环境：`D:\视觉检测工作区\envs\yolox\Scripts\python.exe`，RTX 4060 Ti 8GB。
-原环境验证过 float32，混合精度尚未通过真实训练验证。
+当前实验使用 RTX 4060 Ti 8GB，已经完成 float32 训练；不启用混合精度。
 
 ```powershell
 # 仅检查冻结的 SQLite 在线备份；不要把备份提交到仓库
-python tools/audit_annotations.py --snapshot D:\private\labels.sqlite3 --root \\stdeer\home\本地分析图片\cases --output D:\private\audit.json
+python tools/audit_annotations.py --snapshot ./private/labels.sqlite3 --root ./private/images --output ./private/audit.json
 python -m unittest discover -s tests -v
 
 # 分类服务独立运行：测试目录与正式数据库分开
@@ -65,7 +69,8 @@ python -m pip install -r labeler/requirements.txt
 python labeler/app.py --help
 ```
 
-历史训练用法见 [training/README.md](training/README.md)，分类工具用法见 [labeler/README.md](labeler/README.md)。
+位置训练用法见 [training/DETECTOR_TRAINING.md](training/DETECTOR_TRAINING.md)，
+图片级分类用法见 [training/README.md](training/README.md)，分类工具用法见 [labeler/README.md](labeler/README.md)。
 其中带时间的指标均为历史实验；部署脚本绑定既有 101 环境，不应在其他服务器直接执行。
 
 后续训练参照 [YOLOX 官方自定义训练说明](https://yolox.readthedocs.io/en/latest/train_custom_data.html)，
