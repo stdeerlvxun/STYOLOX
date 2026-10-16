@@ -129,7 +129,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "2a7853c7da01a17871853d447f02be943d1cb776",
+    "source_commit": "fef0b6ec66f4d32502a33470fed6a3488408672d",
     "files": [
       {
         "path": ".gitignore",
@@ -153,7 +153,7 @@
       },
       {
         "path": "annotations.py",
-        "sha256": "8c430cdcc7931dd5fd2d32bc927661b6be515d1cd8f9b39bcd3fcc0c95e8b12a"
+        "sha256": "5ee9add6b8a76549ab97c2ec9fe53af41b163d7436ae7c0276f03042b4aa958e"
       },
       {
         "path": "app.py",
@@ -205,7 +205,7 @@
       },
       {
         "path": "deployment/upgrade_101.py",
-        "sha256": "d52a74bab9f89d6a3bca9b221384177c158508202261e23652e7d6df1020ab65"
+        "sha256": "8eb67a5d198a2561267d87907be12be6598ba896a93e39b138d1437dbf248901"
       },
       {
         "path": "deployment/verify_annotations.py",

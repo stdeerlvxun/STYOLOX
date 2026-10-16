@@ -60,7 +60,7 @@ def upgrade(release):
         if temporary.is_symlink():
             temporary.unlink()
         switch(previous, temporary)
-        service('start')
+        service('restart')
         raise
 
 

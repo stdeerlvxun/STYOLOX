@@ -92,6 +92,9 @@ class Annotations:
                   id INTEGER PRIMARY KEY,feedback_id INTEGER NOT NULL REFERENCES annotation_feedback(id),
                   run_id TEXT NOT NULL,model_sha256 TEXT NOT NULL,created_at TEXT NOT NULL,
                   UNIQUE(feedback_id,run_id));
+                CREATE INDEX IF NOT EXISTS annotation_history_image ON annotation_history(image_id);
+                CREATE INDEX IF NOT EXISTS annotation_feedback_image ON annotation_feedback(image_id);
+                CREATE INDEX IF NOT EXISTS annotation_proposal_history_image_status ON annotation_proposal_history(image_id,status);
             ''')
 
     def proposal_match(self, alias='p', include_annotations=False):
