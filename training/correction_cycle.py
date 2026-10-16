@@ -60,6 +60,11 @@ def validate_config(config):
         raise ValueError('minimum_validation_recall must be a finite fraction')
     if type(support) is not int or support<10:
         raise ValueError('minimum_validation_boxes must be at least 10')
+    if type(config.get('class_agnostic',False)) is not bool:
+        raise ValueError('class_agnostic must be a boolean')
+    cutoff=config.get('fixed_threshold')
+    if cutoff is not None and (type(cutoff) not in (int,float) or not math.isfinite(cutoff) or not 0<cutoff<1):
+        raise ValueError('fixed_threshold must be a finite fraction')
     for key, default, upper in (('minimum_gpu_free_mib', 2048, None), ('maximum_gpu_utilization_percent', 30, 100)):
         value = config.get(key, default)
         if type(value) not in (int, float) or not math.isfinite(value) or value<0 or (upper is not None and value>upper):
@@ -316,10 +321,13 @@ def execute_cycle(config, config_path, payload, items, run, report):
     if not included:
         report.update(status='waiting_for_trainable_confirmed_images', feedback_ids_actually_trained=[])
         return report
-    run_process([python, root/'train_detector.py', '--dataset', dataset_path, '--run', detector,
+    training_arguments=[python, root/'train_detector.py', '--dataset', dataset_path, '--run', detector,
                  '--adapt-backbone', '--input-size', '640', '--batch-size', '2', '--epochs', '50',
-                 '--seconds', '240', '--initialize-from', config['current_detector_run'], '--defer-test'],
-                timeout=600, cwd=root, log=run/'train.log')
+                 '--seconds', '240', '--initialize-from', config['current_detector_run'], '--defer-test']
+    if config.get('class_agnostic',False):training_arguments.append('--class-agnostic')
+    if config.get('fixed_threshold') is not None:
+        training_arguments.extend(['--fixed-threshold',str(config['fixed_threshold'])])
+    run_process(training_arguments,timeout=600,cwd=root,log=run/'train.log')
     metrics = read_json(detector/'metrics.json')
     if metrics.get('test') is not None or metrics.get('test_evaluation_pending') is not True:
         raise ValueError('Automatic rounds must not reuse the held-out test set')

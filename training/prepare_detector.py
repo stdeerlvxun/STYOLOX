@@ -86,20 +86,49 @@ def identity_keys(row):
     return {'sha:' + row['sha256'], 'case:' + row['case_id']} | {'order:' + v for v in row['order_keys']}
 
 
+def history_records(historical):
+    return list((historical or {}).get('records', [])) + list((historical or {}).get('historical_holdout_records', []))
+
+
+def collect_holdout_history(records, historical=None):
+    """Keep an excluded old holdout protected when its image later becomes eligible."""
+    result={};priority={'validation':1,'val':1,'test':2}
+    for row in history_records(historical)+list(records):
+        if row.get('split') not in priority:continue
+        key=(row.get('image_id'),row['sha256'],row['case_id'],tuple(row['order_keys']))
+        previous=result.get(key)
+        if previous is None or priority[row['split']]>priority[previous['split']]:result[key]=dict(row)
+    return list(result.values())
+
+
 def split_records(records, historical=None, seed=42):
     """New detector split; preserve image classifier holdouts where identity overlaps."""
+    historical_rows = history_records(historical)
+    group_history = defaultdict(set)
+    # Include absent historical photos in near-duplicate grouping, so a newly
+    # eligible crop cannot recycle their validation/test identity into training.
+    if historical_rows and all('phash' in row and 'aspect' in row for row in records):
+        archived = [row for row in historical_rows if 'phash' in row and 'aspect' in row]
+        joint = [dict(row, phash=int(row['phash'])) for row in records + archived]
+        assign_groups(joint)
+        for row, linked in zip(records, joint):
+            row['group'] = linked['group']
+        for row in joint[len(records):]:
+            group_history[row['group']].add(row['split'])
     grouped = defaultdict(list)
     for row in records:
         grouped[row['group']].append(row)
     if len(grouped) < 8:
         raise ValueError('Too few independent order groups for train/validation/test (minimum 8)')
     history = defaultdict(set)
-    for row in (historical or {}).get('records', []):
+    for row in historical_rows:
         for key in identity_keys(row):
-            history[key].add(row['split'])
+            history[key].add('validation' if row['split'] == 'val' else row['split'])
     fixed, overlap = {}, []
     for group, rows in grouped.items():
-        membership = set().union(*(history[key] for row in rows for key in identity_keys(row)))
+        membership = group_history[group] | set().union(*(history[key] for row in rows for key in identity_keys(row)))
+        if 'val' in membership:
+            membership = (membership - {'val'}) | {'validation'}
         if membership:
             # Do not recycle a historic classifier test or validation order into detector training.
             fixed[group] = 'test' if 'test' in membership else 'validation' if 'validation' in membership else 'train'
@@ -215,6 +244,7 @@ def prepare(run, snapshot=None, source_root=NAS_ROOT, historical_path=DEFAULT_HI
         raise ValueError('Source snapshot changed during preparation')
     assign_groups(records)
     historical = json.loads(Path(historical_path).read_text(encoding='utf-8')) if historical_path and Path(historical_path).exists() else None
+    if historical:historical={**historical,'records':history_records(historical),'historical_holdout_records':[]}
     split_audit = split_records(records, historical)
     verify_no_leakage(records)
     names = sorted({box['problem'] for row in records for box in row['boxes']})
@@ -256,7 +286,8 @@ def prepare(run, snapshot=None, source_root=NAS_ROOT, historical_path=DEFAULT_HI
     dataset = {'schema_version': 1, 'training_policy': POLICY, 'source_root': str(source_root),
                'snapshot_path': str(snapshot), 'snapshot_sha256': snapshot_hash,
                'created_at': dt.datetime.now(dt.timezone.utc).isoformat(), 'categories': categories,
-               'summary': summary, 'split_audit': split_audit, 'records': records, 'excluded': excluded}
+               'summary': summary, 'split_audit': split_audit, 'records': records, 'excluded': excluded,
+               'historical_holdout_records':collect_holdout_history(records,historical)}
     if feedback is not None:
         dataset['negative_feedback_records'] = feedback['records']
         dataset['included_feedback_ids'] = feedback['included_feedback_ids']

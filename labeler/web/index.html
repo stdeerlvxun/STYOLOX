@@ -31,8 +31,16 @@
       <div class="filter-controls">
         <div class="filter-heading"><h2>图片</h2><span id="resultCount">0 张</span></div>
         <p class="small muted">近期优先 · 按售后单日期从近到远</p>
-        <label class="sr-only" for="statusFilter">分类状态</label>
-        <select id="statusFilter"><option value="unclassified">日常分类 · 跳过模型待审核</option><option value="error_review">错例待复核 / 补标</option><option value="error_reviewed">本轮错例已复核</option><option value="auto_boxes">自动框 · 待审核</option><option value="annotation_pending">问题图待位置补标</option><option value="annotated">已有位置补标</option><option value="model_unrelated">模型判定无关 · 待审核</option><option value="all_unclassified">所有未分类 · 含模型待审核</option><option value="all">全部图片</option><option value="classified">已分类</option><option value="unrelated">已确认无关图片</option><option value="normal">已确认无可见破损</option><option value="pending">责任待核 / 看不清</option><option value="unavailable">源文件不可用</option></select>
+        <div id="commonStatusFilters" class="common-status-filters" role="group" aria-label="常用图片任务">
+          <button data-status="auto_boxes" aria-pressed="false" title="审核和纠正模型生成的候选框">待我审核 <span id="autoBoxCount">0</span></button>
+          <button data-status="unclassified" aria-pressed="true" title="近期未分类图片，跳过模型待审核">待分类</button>
+          <button data-status="annotation_pending" aria-pressed="false" title="已有问题点，尚待补充问题位置">待补框</button>
+          <button data-status="annotated" aria-pressed="false" title="查看已有位置补标">已补框</button>
+        </div>
+        <details id="statusDetails" class="status-details"><summary><span id="statusMoreLabel">更多筛选</span></summary>
+          <label class="sr-only" for="statusFilter">更多图片状态</label>
+          <select id="statusFilter"><optgroup label="常用任务"><option value="unclassified">待分类 · 跳过模型待审核</option><option value="auto_boxes">待我审核 · 自动框</option><option value="annotation_pending">待补框 · 已有问题点</option><option value="annotated">已有位置补标</option></optgroup><optgroup label="复核与其他状态"><option value="error_review">错例待复核 / 补标</option><option value="error_reviewed">本轮错例已复核</option><option value="model_unrelated">模型判定无关 · 待审核</option><option value="all_unclassified">所有未分类 · 含模型待审核</option><option value="all">全部图片</option><option value="classified">已分类</option><option value="unrelated">已确认无关图片</option><option value="normal">已确认无可见破损</option><option value="pending">责任待核 / 看不清</option><option value="unavailable">源文件不可用</option></optgroup></select>
+        </details>
         <select id="reviewKind" aria-label="错例类型" hidden><option value="">全部错例</option><option value="problem_miss">问题点漏判</option><option value="extra_candidate">问题点额外候选</option><option value="normal_overcall">正常图报出问题</option><option value="false_unrelated">相关图误判无关</option><option value="missed_unrelated">未识别出的无关图</option></select>
         <div id="reviewActions" hidden><button id="selectReviewPage">选中本页</button><button id="confirmReviewSelected">确认所选无关</button></div>
         <label class="sr-only" for="search">搜索图片</label><input id="search" placeholder="搜索文件名、售后单或备注" type="search">

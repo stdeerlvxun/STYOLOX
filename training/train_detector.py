@@ -172,6 +172,7 @@ class Detector:
         self.threshold = threshold
         self.nms = nms
         self.max_predictions = max_predictions
+        self.class_agnostic = len(categories) == 1 and categories[0]['name'] == '问题位置'
 
     @torch.inference_mode()
     def predict_image(self, image, threshold=None):
@@ -201,6 +202,7 @@ class Detector:
             class_id = int(value[6])
             xywh = [float(x1/width), float(y1/height), float((x2-x1)/width), float((y2-y1)/height)]
             predictions.append({'class_id': class_id, 'problem': self.categories[class_id],
+                                'class_agnostic': self.class_agnostic,
                                 'score': float(value[4]*value[5]),
                                 'xyxy': [float(x1), float(y1), float(x2), float(y2)],
                                 'xywh': xywh, 'normalized_xywh': xywh})
@@ -248,6 +250,19 @@ def transferred_state(target_state, checkpoint, categories):
     return result
 
 
+def location_training_records(dataset):
+    """Make an in-memory one-class view without rewriting human issue labels."""
+    records = copy.deepcopy(dataset['records'])
+    feedback = copy.deepcopy(dataset.get('negative_feedback_records', []))
+    for record in records + feedback:
+        for box in record['boxes']:
+            box['original_class_id'] = box['class_id']
+            box['original_problem'] = box['problem']
+            box['class_id'] = 0
+            box['problem'] = '问题位置'
+    return [{'id': 0, 'name': '问题位置'}], records, feedback
+
+
 def feedback_sample(record, rgb, input_size, max_labels):
     """Same resize/flip for the source, positive boxes and human normal regions."""
     from yolox.data.data_augment import preproc, augment_hsv
@@ -267,7 +282,8 @@ def feedback_sample(record, rgb, input_size, max_labels):
 
 
 def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_size=512,
-          adapt_backbone=False, defer_test=False, initialize_from=None):
+          adapt_backbone=False, defer_test=False, initialize_from=None,
+          location_only=False, fixed_threshold=None):
     started = time.monotonic()
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -288,15 +304,25 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
               'dataset_sha256': sha256(dataset_path), 'test_used_for_selection': False,
               'evaluation_iou': .5, 'source_images_copied': False,
               'test_deferred_until_validation_report': defer_test}
+    config['location_only'] = location_only
+    config['class_agnostic'] = location_only
+    config['fixed_threshold'] = fixed_threshold
+    if fixed_threshold is not None:
+        config['selection'] = 'Fixed threshold; validation recall with FP <= 2*GT, then F2; over-budget fallback F2'
     config['partial_annotations'] = 'For images with classified problems lacking boxes, ignore unmatched objectness anchors; retain positives and all class/regression losses'
     write_json(run_dir/'planned-config.json', config)
     dataset = json.loads(Path(dataset_path).read_text(encoding='utf-8-sig'))
     categories = dataset['categories']
     records = dataset['records']
     feedback_records = dataset.get('negative_feedback_records', [])
+    if location_only:
+        categories, records, feedback_records = location_training_records(dataset)
+        config['issue_type_prediction'] = False
+        config['original_issue_labels_preserved'] = True
     config['human_normal_roi_feedback'] = {'images': len(feedback_records),
-        'regions': sum(len(r['negative_rois']) for r in feedback_records), 'weight': 2.,
-        'repeats_per_epoch': 3, 'scope': 'normal ROI negative objectness only; all other unboxed anchors ignored',
+        'regions': sum(len(r['negative_rois']) for r in feedback_records), 'weight': .25,
+        'repeats_per_epoch': 1, 'normalization': 'bounded total auxiliary mean BCE after YOLOX foreground normalization',
+        'scope': 'normal ROI negative objectness only; all other unboxed anchors ignored',
         'whole_image_normal': False, 'positive_truth_changed': False}
     splits = {split: [r for r in records if r['split'] == split] for split in ('train', 'val', 'test')}
     if not splits['val'] and any(r['split'] == 'validation' for r in records):
@@ -372,7 +398,8 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
     roi_batch = []
     centers = anchor_centers(input_size, device)
     def mask_partial_negatives(module, inputs, output):
-        return region_objectness_loss(output, inputs[1], partial_batch, roi_batch, centers, weight=2.)
+        return region_objectness_loss(output, inputs[1], partial_batch, roi_batch, centers,
+                                       weight=.25, bounded=True)
     objectness_hook = model.head.bcewithlog_loss.register_forward_hook(mask_partial_negatives)
     transform = TrainTransform(max_labels=max(20, max(len(r['boxes']) for r in records)),
                                flip_prob=.5, hsv_prob=.5)
@@ -395,7 +422,7 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
         else:
             model.backbone.eval()
         model.head.use_l1 = epoch >= 20
-        order = list(splits['train']) + feedback_records*3
+        order = list(splits['train']) + feedback_records
         random.shuffle(order)
         losses = []
         for offset in range(0, len(order), batch_size):
@@ -431,8 +458,16 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
         if epoch == 1 or epoch % 5 == 0 or epoch == epochs or reached_budget:
             model.eval()
             predictions = predict_records(detector, splits['val'], cache)
-            selected, candidates = select_threshold(splits['val'], predictions, categories)
-            key = (selected['f2'], selected['recall'], -selected['fp'], -epoch)
+            if fixed_threshold is None:
+                selected, candidates = select_threshold(splits['val'], predictions, categories)
+                key = (selected['f2'], selected['recall'], -selected['fp'], -epoch)
+            else:
+                report, _ = evaluate_predictions(splits['val'], predictions, categories, fixed_threshold)
+                selected = {'threshold': fixed_threshold, **report['class_and_location']}
+                candidates = [selected]
+                within_budget = selected['fp'] <= 2 * selected['support']
+                key = (within_budget, selected['recall'] if within_budget else selected['f2'],
+                       selected['f2'], -selected['fp'], -epoch)
             epoch_log['validation'] = selected
             if best_key is None or key > best_key:
                 best_key = key
@@ -475,6 +510,8 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
                for split, rows in splits.items()}
     metrics = {'experiment': 'human-confirmed YOLOX-s detector with explicit local normal ROI corrections' if feedback_records else 'first human-confirmed YOLOX-s bounding-box detector',
                'exploratory_small_holdout': True, 'image_counts': {s: len(v) for s, v in splits.items()},
+               'class_agnostic': location_only,
+               'metric_semantics': 'single-class issue localization only; original issue types are not predicted' if location_only else 'class_and_location requires original issue type and IoU >= .5; location_only ignores issue type',
                'group_counts': {s: len(v) for s, v in groups.items()}, 'class_support': support,
                'selected_epoch': best_selection['epoch'], 'selected_threshold': detector.threshold,
                'completed_epochs': epoch, 'training_seconds': training_seconds,
@@ -508,7 +545,11 @@ def finalize_test(dataset_path, run_dir):
     if sha256(dataset_path) != config['dataset_sha256']:
         raise ValueError('Frozen dataset changed')
     dataset = json.loads(Path(dataset_path).read_text(encoding='utf-8-sig'))
-    records = [r for r in dataset['records'] if r['split'] == 'test']
+    categories = dataset['categories']
+    records = dataset['records']
+    if config.get('location_only'):
+        categories, records, _ = location_training_records(dataset)
+    records = [r for r in records if r['split'] == 'test']
     torch.set_num_threads(2)
     detector = load_detector(run_dir)
     predictions = {}
@@ -521,7 +562,7 @@ def finalize_test(dataset_path, run_dir):
             if image.size != (record['width'], record['height']):
                 raise ValueError('Source test image geometry changed')
             predictions[str(record['image_id'])] = detector.predict_image(image, min(THRESHOLDS))
-    report, details = evaluate_predictions(records, predictions, dataset['categories'], detector.threshold)
+    report, details = evaluate_predictions(records, predictions, categories, detector.threshold)
     write_json(run_dir/'test-predictions.json', {'model_sha256': sha256(run_dir/'detector.pt'),
               'threshold': detector.threshold, 'raw_predictions_at_min_threshold': predictions,
               'evaluated_images': details})
@@ -532,12 +573,52 @@ def finalize_test(dataset_path, run_dir):
     return report
 
 
+def diagnose_fit(dataset_path, run_dir):
+    """Read-only train/validation fit report; never select or inspect test data."""
+    run_dir = Path(run_dir)
+    checkpoint = torch.load(run_dir/'detector.pt', map_location='cpu', weights_only=False)
+    if sha256(dataset_path) != checkpoint['config']['dataset_sha256']:
+        raise ValueError('Frozen dataset changed')
+    dataset = json.loads(Path(dataset_path).read_text(encoding='utf-8-sig'))
+    categories, records = dataset['categories'], dataset['records']
+    if checkpoint['config'].get('location_only'):
+        categories, records, _ = location_training_records(dataset)
+    torch.set_num_threads(2)
+    detector = load_detector(run_dir)
+    result = {'model_sha256': sha256(run_dir/'detector.pt'),
+              'class_agnostic': detector.class_agnostic, 'test_inspected': False}
+    for split, names in [('train', ('train',)), ('validation', ('val', 'validation'))]:
+        rows = [record for record in records if record['split'] in names]
+        predictions = {}
+        for record in rows:
+            raw = Path(record['full_path']).read_bytes()
+            if hashlib.sha256(raw).hexdigest() != record['sha256']:
+                raise ValueError('Fit image changed')
+            with Image.open(io.BytesIO(raw)) as image:
+                image = ImageOps.exif_transpose(image).convert('RGB')
+                if image.size != (record['width'], record['height']):
+                    raise ValueError('Fit image geometry changed')
+                predictions[str(record['image_id'])] = detector.predict_image(image)
+        result[split], _ = evaluate_predictions(rows, predictions, categories, detector.threshold)
+    write_json(run_dir/'train-validation-fit.json', result)
+    print(json.dumps(result, ensure_ascii=False), flush=True)
+    return result
+
+
 def compare_validation(dataset_path, run_dir, base_run):
     """Compare on the same current validation truth by class name; never touch test."""
+    torch.set_num_threads(2)
     dataset = json.loads(Path(dataset_path).read_text(encoding='utf-8-sig'))
     records = [r for r in dataset['records'] if r['split'] in ('val', 'validation')]
     categories = dataset['categories']
     names = {c['name']: int(c['id']) for c in categories}
+    candidate_checkpoint = torch.load(Path(run_dir)/'detector.pt', map_location='cpu', weights_only=False)
+    location_objective = bool(candidate_checkpoint['config'].get('class_agnostic') or
+                              candidate_checkpoint['config'].get('location_only'))
+    fixed_threshold = candidate_checkpoint['config'].get('fixed_threshold')
+    if location_objective:
+        categories, converted, _ = location_training_records(dataset)
+        records = [r for r in converted if r['split'] in ('val', 'validation')]
     reports = {}
     for name, directory in [('base', base_run), ('candidate', run_dir)]:
         detector = load_detector(directory)
@@ -546,9 +627,14 @@ def compare_validation(dataset_path, run_dir, base_run):
             if sha256(record['full_path']) != record['sha256']:
                 raise ValueError('Validation source changed during comparison')
             values = detector.predict_image(record['full_path'], min(THRESHOLDS))
-            predictions[str(record['image_id'])] = [dict(v, class_id=names.get(v['problem'], -1))
+            predictions[str(record['image_id'])] = [dict(v, class_id=0 if location_objective else names.get(v['problem'], -1))
                                                      for v in values]
-        selected, candidates = select_threshold(records, predictions, categories)
+        if fixed_threshold is None:
+            selected, candidates = select_threshold(records, predictions, categories)
+        else:
+            fixed_report, _ = evaluate_predictions(records, predictions, categories, fixed_threshold)
+            selected = {'threshold': fixed_threshold, **fixed_report['class_and_location']}
+            candidates = [selected]
         report, _ = evaluate_predictions(records, predictions, categories, selected['threshold'])
         reports[name] = {'model_sha256': sha256(Path(directory)/'detector.pt'),
                          'selection': selected, 'threshold_candidates': candidates, **report}
@@ -559,7 +645,11 @@ def compare_validation(dataset_path, run_dir, base_run):
     non_regression = candidate['recall'] >= base['recall'] and candidate['f2'] >= base['f2'] and candidate['fp'] <= base['fp']
     strict_improvement = candidate['recall'] > base['recall'] or candidate['f2'] > base['f2'] or candidate['fp'] < base['fp']
     result = {'validation_only': True, 'test_used': False, 'dataset_sha256': sha256(dataset_path),
-              'class_mapping': 'issue name', 'base': reports['base'], 'candidate': reports['candidate'],
+              'class_mapping': 'all issue classes mapped to problem-location class 0' if location_objective else 'issue name',
+              'comparison_objective': 'problem_location_only' if location_objective else 'issue_type_and_location',
+              'fixed_threshold_for_both': fixed_threshold,
+              'strict_issue_type_metrics': None if location_objective else {'base': base, 'candidate': candidate},
+              'base': reports['base'], 'candidate': reports['candidate'],
               'baseline': {**reports['base'], **base},
               'same_validation_images': True, 'problem_name_mapping': True,
               'promotion_recommended': non_regression and strict_improvement,
@@ -572,6 +662,7 @@ def compare_validation(dataset_path, run_dir, base_run):
 
 def region_fit_diagnostic(dataset_path, run_dir, base_run):
     """Training-fit check on reviewed local regions, not held-out generalization accuracy."""
+    torch.set_num_threads(2)
     from yolox.data.data_augment import ValTransform
     dataset = json.loads(Path(dataset_path).read_text(encoding='utf-8-sig'))
     rows = dataset.get('negative_feedback_records', [])
@@ -617,13 +708,18 @@ if __name__ == '__main__':
     parser.add_argument('--adapt-backbone', action='store_true')
     parser.add_argument('--defer-test', action='store_true')
     parser.add_argument('--evaluate-test-only', action='store_true')
+    parser.add_argument('--diagnose-fit-only', action='store_true')
     parser.add_argument('--initialize-from', type=Path)
+    parser.add_argument('--location-only', '--class-agnostic', dest='location_only', action='store_true', help='Train one generic issue-location class while preserving original human labels')
+    parser.add_argument('--fixed-threshold', type=float, help='Keep the pre-registered threshold fixed across checkpoints and comparisons')
     parser.add_argument('--compare-base', type=Path, help='Validation-only comparison after training or with --compare-only')
     parser.add_argument('--compare-only', action='store_true')
     parser.add_argument('--compare-validation-to', type=Path,
                         help='Run only same-dataset validation comparison to this baseline; no training or test')
     args = parser.parse_args()
-    if args.compare_only or args.compare_validation_to:
+    if args.diagnose_fit_only:
+        diagnose_fit(args.dataset, args.run)
+    elif args.compare_only or args.compare_validation_to:
         base_run = args.compare_validation_to or args.compare_base
         if not base_run:
             parser.error('--compare-only requires --compare-base')
@@ -632,6 +728,7 @@ if __name__ == '__main__':
         finalize_test(args.dataset, args.run)
     else:
         train(args.dataset, args.run, args.epochs, args.seconds, args.batch_size, args.input_size,
-              args.adapt_backbone, args.defer_test, args.initialize_from)
+              args.adapt_backbone, args.defer_test, args.initialize_from, args.location_only,
+              args.fixed_threshold)
         if args.compare_base:
             print(json.dumps(compare_validation(args.dataset, args.run, args.compare_base), ensure_ascii=False), flush=True)

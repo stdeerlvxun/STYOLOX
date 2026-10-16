@@ -1,10 +1,50 @@
 import unittest
+import json
+from pathlib import Path
+import tempfile
+from types import SimpleNamespace
+from unittest.mock import patch
 import torch
 
-from train_detector import adaptable_parameter, evaluate_predictions, match_boxes, partial_objectness_loss, select_threshold, xyxy_iou
+from train_detector import adaptable_parameter, compare_validation, evaluate_predictions, location_training_records, match_boxes, partial_objectness_loss, select_threshold, xyxy_iou
 
 
 class DetectorMetricsTests(unittest.TestCase):
+    def test_binary_candidate_comparison_scores_both_models_as_locations(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root/'data.json'
+            dataset.write_text(json.dumps({'categories': [{'id': 3, 'name': '崩边'}], 'records': [
+                {'image_id': 1, 'relative_path': 'image', 'full_path': 'image', 'group': 'g',
+                 'sha256': 'hash', 'split': 'validation', 'boxes': [
+                    {'class_id': 3, 'problem': '崩边', 'xyxy': [0, 0, 10, 10]}]}]}), encoding='utf-8')
+            def fake_detector(problem):
+                return SimpleNamespace(model=SimpleNamespace(cpu=lambda: None),
+                    predict_image=lambda *args: [{'class_id': 0, 'problem': problem,
+                        'xyxy': [0, 0, 10, 10], 'score': .1}])
+            with patch('train_detector.torch.load', return_value={'config': {'class_agnostic': True, 'fixed_threshold': .05}}), \
+                 patch('train_detector.load_detector', side_effect=[fake_detector('崩边'), fake_detector('问题位置')]), \
+                 patch('train_detector.sha256', return_value='hash'):
+                result = compare_validation(dataset, root, root)
+            self.assertEqual(result['comparison_objective'], 'problem_location_only')
+            self.assertEqual(result['baseline']['tp'], 1)
+            self.assertEqual(result['candidate']['tp'], 1)
+            self.assertEqual(result['candidate']['selection']['threshold'], .05)
+            self.assertIsNone(result['strict_issue_type_metrics'])
+            self.assertFalse(result['test_used'])
+
+    def test_location_only_training_view_preserves_original_human_classes(self):
+        box = {'class_id': 3, 'problem': '崩边', 'xyxy': [1, 2, 3, 4]}
+        dataset = {'records': [{'boxes': [box], 'split': 'test', 'image_state': ''}],
+                   'negative_feedback_records': [{'boxes': [box]}]}
+        categories, records, feedback = location_training_records(dataset)
+        self.assertEqual(categories, [{'id': 0, 'name': '问题位置'}])
+        self.assertEqual(records[0]['boxes'][0]['class_id'], 0)
+        self.assertEqual(records[0]['boxes'][0]['original_problem'], '崩边')
+        self.assertEqual(feedback[0]['boxes'][0]['original_class_id'], 3)
+        self.assertEqual(dataset['records'][0]['boxes'][0]['class_id'], 3)
+        self.assertEqual(records[0]['split'], 'test')
+
     def box(self, kind=0, coordinates=None, score=.9):
         return {'class_id': kind, 'xyxy': coordinates or [0, 0, 10, 10], 'score': score}
 

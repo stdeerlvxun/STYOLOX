@@ -1,6 +1,6 @@
 {
   "training": {
-    "source_commit": "dd6296e14104f5f2bbe4adca52b9cd9723f68790",
+    "source_commit": "ea52b2d6a544bb3321b0e4a655bc99c6375df623",
     "files": [
       {
         "path": ".gitignore",
@@ -12,7 +12,7 @@
       },
       {
         "path": "DETECTOR_TRAINING.md",
-        "sha256": "453aed00c60858aff9227655528a0a6ee868c9aaff66a1c651b204d4c1452a76"
+        "sha256": "48db7b1427362f9b879528021765327b6d48edd7a28e96df73f48b2418875616"
       },
       {
         "path": "README.md",
@@ -20,7 +20,7 @@
       },
       {
         "path": "correction_cycle.py",
-        "sha256": "27e3338963d3a43834e3fc04e5888d781ab65ca174d0f143fb5f0370608076d9"
+        "sha256": "9ce10bba021a609c9c2cc166f950a117c15d527730894dd0f696c356d8d0111f"
       },
       {
         "path": "export_recommendations.py",
@@ -36,7 +36,7 @@
       },
       {
         "path": "generate_detector_proposals.py",
-        "sha256": "ee81e8a90be84f0d9dbc73dd0948339ebf10f915ecb715fff03d70474aa9ef38"
+        "sha256": "6b5ffc6010d80f02f09b5ec83f66d75ec18b32f628dda9794f4e3bc43561af31"
       },
       {
         "path": "improve_classifier.py",
@@ -44,7 +44,7 @@
       },
       {
         "path": "prepare_detector.py",
-        "sha256": "87b9fbd606c61f1e7fb052497e1587f6fe94e69da858ac5a9143e7e07616567d"
+        "sha256": "a8f83ac420c5edf39b281bf16b21127c19c2cfd9e91421a79c3b5a0570d39a79"
       },
       {
         "path": "recall_classifier.py",
@@ -56,7 +56,7 @@
       },
       {
         "path": "roi_feedback.py",
-        "sha256": "a4c50255de8429783c0f2c189a0f353b168490a6f049ee733e37cfd827f787fe"
+        "sha256": "8109e0f78f92fa7a109258e0475f68d68c0396ba6293a9d1922259d472795609"
       },
       {
         "path": "test_box_proposals.py",
@@ -68,11 +68,11 @@
       },
       {
         "path": "test_correction_cycle.py",
-        "sha256": "2386fd745865ae17dfeb73e1d503b0e122e4dec6b62848b74ad13cacecb50b7b"
+        "sha256": "dfc226c0c98f8c4f66964c768b313047d95d7c0d541fa66f7eaed420764aebc6"
       },
       {
         "path": "test_detector_proposals.py",
-        "sha256": "fc6c7473bb3741103e02f9bcda34bf708a522890a9abd0bb3ba698b7cd27af6d"
+        "sha256": "172fc371c8eb29ed64db00dadfa171d9e2820136674c6ae22b7d960beeffa780"
       },
       {
         "path": "test_improve_classifier.py",
@@ -80,7 +80,7 @@
       },
       {
         "path": "test_prepare_detector.py",
-        "sha256": "e6b92f29e84a93e1f8df93de0e965b93cdb5c2aca5048bc0c0ee8d853af660af"
+        "sha256": "2a86b8e0246d6dbae7c3d01d51c3634101a5df8b80a0dc65403953d7f810fa1f"
       },
       {
         "path": "test_retrain_latest.py",
@@ -88,11 +88,11 @@
       },
       {
         "path": "test_roi_feedback.py",
-        "sha256": "922999aef4194de21597e78690cd8fee7dcc8ab28740078475f7d0e715b36a0e"
+        "sha256": "d916819af4d440136fda28cd1a9e493de8876a57f2079f0f95d66cc4e7dcacee"
       },
       {
         "path": "test_train_detector.py",
-        "sha256": "83e7f81b477fcfa5c0a80fb4040d1897ebd0696a30c44446d5088417b708aa2a"
+        "sha256": "6e47f3827e2b39801c034fe8cd079361f9c7a12f7778b714ab83fa2983a3acde"
       },
       {
         "path": "test_unrelated_filter.py",
@@ -100,7 +100,7 @@
       },
       {
         "path": "train_detector.py",
-        "sha256": "66cf6561bf9f1201491a5361d571b202790388d49e321f9977c892a44d36782c"
+        "sha256": "d79e51c784ca6ec299b8be39cf930463b10d5e8af4e7fe1e7e8485f24480d74b"
       },
       {
         "path": "unrelated_filter.py",
@@ -113,7 +113,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "295edf44243c3ddb5aecd485e5a0490148da5bf4",
+    "source_commit": "5e7800204879ccc55c665c1ce68df0af58520adc",
     "files": [
       {
         "path": ".gitignore",
@@ -129,7 +129,7 @@
       },
       {
         "path": "README.md",
-        "sha256": "b6b1cfb13d10b2baf5776f695d08913172c65dfaaa7ee3986975e0878be51763"
+        "sha256": "051d8fce64ff7b626fde5df81d69e9d2732f582f9e9e9704b8a811ff0eebd4d0"
       },
       {
         "path": "annotations.py",
@@ -240,6 +240,10 @@
         "sha256": "9120f7ade33f367076ceadb652ace5be8a7d2b36816d513d6a7e13af3807366b"
       },
       {
+        "path": "test_filter_ui.cjs",
+        "sha256": "ec5c4ebd13d4419f7dc7a0f20ee26d916ab5dc23fb3575b0b2a60b98fbe5e009"
+      },
+      {
         "path": "test_recommendations.py",
         "sha256": "9956c2a5ca5fb8b595a2d13a037ceeadd505ef022b991d0064d575b9ff5fe763"
       },
@@ -253,15 +257,15 @@
       },
       {
         "path": "web/app.js",
-        "sha256": "44628459f77ef0881e53736709717493d2fbad9504ca3d928af9ba409a36521f"
+        "sha256": "e51157dcd184a2b802242dc4725924b8d7bd4046f90fb7311ab801c93b7a71ae"
       },
       {
         "path": "web/index.html",
-        "sha256": "31859e516b712c1d1f514992fd25a5f45c535f87adc81209cde5e4a16bdc1365"
+        "sha256": "953887adf8a027b44e25c5ce25d5d771406e8cd217bd4b1eaec5aad825deea64"
       },
       {
         "path": "web/style.css",
-        "sha256": "5a8caff950d7142d8aa040edcb04468dbe62d0c3c114d884265e0f3ae510a7d8"
+        "sha256": "3a6025e1cd805bc4f917674bd9079166317fe37580a0f6b6cf309111217d3f50"
       },
       {
         "path": "启动分类工具.cmd",

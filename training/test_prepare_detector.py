@@ -9,7 +9,7 @@ import unittest
 import numpy as np
 from PIL import Image
 
-from prepare_detector import (COORDINATES, annotation_exclusion, normalize_boxes, prepare,
+from prepare_detector import (COORDINATES, annotation_exclusion, collect_holdout_history, normalize_boxes, prepare,
                               split_records, verify_no_leakage)
 from vision_classifier import assign_groups
 
@@ -74,11 +74,30 @@ class DetectorPreparationTests(unittest.TestCase):
         split_records(records, historical)
         self.assertEqual([r['split'] for r in records[:4]], ['test', 'test', 'validation', 'validation'])
 
+    def test_temporarily_excluded_holdouts_remain_protected_in_later_rounds(self):
+        records=[{'image_id':i,'case_id':'c'+str(i),'sha256':'s'+str(i),'order_keys':[],
+            'group':i,'boxes':[{'problem':'崩边'}]} for i in range(12)]
+        old=[dict(row,split='test' if i<2 else 'validation') for i,row in enumerate(records[:4])]
+        ledger=collect_holdout_history([],{'records':old})
+        history={'records':[], 'historical_holdout_records':ledger}
+        split_records(records,history)
+        self.assertEqual([r['split'] for r in records[:4]],['test','test','validation','validation'])
+        self.assertEqual(len(collect_holdout_history([],history)),4)
+
     def test_too_few_orders_stops_without_fake_split(self):
         records = [{'group': i, 'case_id': str(i), 'sha256': str(i), 'order_keys': [],
                     'boxes': [{'problem': '崩边'}]} for i in range(7)]
         with self.assertRaises(ValueError):
             split_records(records)
+
+    def test_absent_historical_near_duplicate_stays_held_out(self):
+        records=[{'image_id':i,'case_id':'new'+str(i),'sha256':'new'+str(i),'order_keys':[],
+            'group':i,'phash':(1 << (i+1))-1,'aspect':1+i*.2,
+            'boxes':[{'problem':'崩边'}]} for i in range(12)]
+        old=dict(records[0],image_id=99,case_id='absent',sha256='absent',split='test')
+        old['phash']=records[0]['phash'] ^ 1
+        split_records(records,{'records':[], 'historical_holdout_records':[old]})
+        self.assertEqual(records[0]['split'],'test')
 
     def test_prepare_is_read_only_checks_sha_and_preserves_all_box_categories(self):
         with tempfile.TemporaryDirectory() as directory:

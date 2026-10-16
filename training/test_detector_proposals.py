@@ -23,6 +23,24 @@ class DetectorProposalTests(unittest.TestCase):
         self.assertAlmostEqual(result[0]['h'],.1)
         self.assertNotEqual(result[0]['id'],result[1]['id'])
 
+    def test_location_only_detector_uses_single_existing_human_problem_name(self):
+        predictions=[{'problem':'问题位置','score':.8,'xywh':[.1,.2,.3,.4]}]
+        result=normalize_predictions(predictions,{'崩边'},class_agnostic=True)
+        self.assertEqual(len(result),1);self.assertEqual(result[0]['problem'],'崩边')
+        self.assertEqual(normalize_predictions(predictions,{'崩边'}),[])
+
+    def test_location_only_detector_does_not_guess_between_multiple_human_types(self):
+        predictions=[{'problem':'问题位置','score':.8,'xywh':[.1,.2,.3,.4]}]
+        self.assertEqual(normalize_predictions(predictions,{'崩边','划伤'},class_agnostic=True),[])
+        self.assertEqual(normalize_predictions(predictions,set(),class_agnostic=True),[])
+
+    def test_location_first_mapping_deduplicates_different_predicted_types(self):
+        predictions=[{'problem':problem,'score':score,'xywh':[.1,.2,.3,.4]}
+            for problem,score in [('划伤',.9),('缺角',.8)]]
+        result=normalize_predictions(predictions,{'其他破损'},class_agnostic=True)
+        self.assertEqual(len(result),1);self.assertEqual(result[0]['problem'],'其他破损')
+        self.assertEqual(result[0]['score'],.9)
+
     def test_default_generation_preserves_all_existing_candidates(self):
         rows=[{'image_id':1,'label_fingerprint':'a'},{'image_id':2,'label_fingerprint':'b'}]
         selected,preserved=select_generation_rows(rows,{1:{'status':'pending','proposal_id':'old','label_fingerprint':'a'}})

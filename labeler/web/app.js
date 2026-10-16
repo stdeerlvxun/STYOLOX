@@ -17,6 +17,21 @@ async function api(path,body){
 function toast(message,error=false){$('toast').textContent=message;$('toast').classList.toggle('error',error);$('toast').hidden=false;clearTimeout(toastTimer);toastTimer=setTimeout(()=>$('toast').hidden=true,error?7000:3500);}
 function fail(error){if(error.name!=='AbortError')toast(error.message || String(error),true);}
 function on(id,event,action){$(id).addEventListener(event,e=>{Promise.resolve(action(e)).catch(fail);});}
+function renderStatusControls(){
+  const status=$('statusFilter').value,buttons=$('commonStatusFilters').querySelectorAll('button[data-status]');
+  let common=false;
+  for(const button of buttons){const active=button.dataset.status===status;button.setAttribute('aria-pressed',String(active));common||=active;}
+  const option=$('statusFilter').querySelector('option[value="'+status+'"]');
+  $('statusMoreLabel').textContent=common?'更多筛选':'更多：'+(option?.textContent||'图片状态');
+  $('statusMoreLabel').title=$('statusMoreLabel').textContent;
+  $('autoBoxCount').textContent=String(S.proposalCounts?.pending||0);
+  $('reviewKind').hidden=!status.startsWith('error_review');
+}
+function changeStatusFilter(status){
+  if(!$('statusFilter').querySelector('option[value="'+status+'"]'))return;
+  $('statusFilter').value=status;$('statusDetails').open=false;
+  renderStatusControls();S.selected.clear();renderSelection();return reload();
+}
 function params(extra={}){
   const q=new URLSearchParams({status:$('statusFilter').value,q:$('search').value.trim(),...extra});
   if($('statusFilter').value.startsWith('error_review')&&$('reviewKind').value)q.set('review_kind',$('reviewKind').value);
@@ -314,8 +329,17 @@ function empty(){
   const reviewed=$('statusFilter').value==='error_review'&&S.errorReviewCounts?.total>0&&S.errorReviewCounts.pending===0;
   const boxesReviewed=$('statusFilter').value==='auto_boxes'&&S.proposalCounts?.total>0&&S.proposalCounts.pending===0;
   strong.textContent=boxesReviewed?'本批自动框审核已完成':reviewed?'本轮错例复核已完成，结果已保存':scanWasRunning?'正在索引图片':'当前筛选没有图片';
-  span.textContent=boxesReviewed?'已确认的位置补标已保存，原分类保持不变；可切换“已有位置补标”查看。':reviewed?'可切换“本轮错例已复核”查看；位置框需另行框选保存。':scanWasRunning?'找到图片后即可开始分类。':'可切换“全部图片”、清除筛选或重新扫描目录。';
-  $('imageMessage').append(strong,span);$('position').textContent='没有可显示的图片';$('fileName').textContent='原图不移动、不复制';$('commit').disabled=true;$('locate').disabled=true;$('note').value='';saveIndicator('未选择图片');renderTags();
+  span.textContent=boxesReviewed?'已确认的位置补标已保存；可继续补框或分类，也可点“已补框”查看。':reviewed?'在“更多筛选”中选择“本轮错例已复核”查看；位置框需另行框选保存。':scanWasRunning?'找到图片后即可开始分类。':'可在“更多筛选”查看全部图片，或清除搜索和标签筛选。';
+  $('imageMessage').append(strong,span);
+  if($('statusFilter').value==='auto_boxes'&&!scanWasRunning){
+    const actions=document.createElement('div');actions.className='empty-actions';
+    for(const [status,label]of [['annotation_pending','继续补框'],['unclassified','开始分类']]){
+      const button=document.createElement('button');button.textContent=label;
+      button.addEventListener('click',()=>changeStatusFilter(status)?.catch(fail));actions.append(button);
+    }
+    $('imageMessage').append(actions);
+  }
+  $('position').textContent='没有可显示的图片';$('fileName').textContent='原图不移动、不复制';$('commit').disabled=true;$('locate').disabled=true;$('note').value='';saveIndicator('未选择图片');renderTags();
 }
 async function selectIndex(index,{internal=false}={}){
   if(index<0||index>=S.total||(S.busy&&!internal))return;
@@ -398,10 +422,10 @@ async function refreshState(){
   S.proposalCounts=proposals;
   if(proposals?.total)$('counts').textContent+=' · 自动框待审 '+proposals.pending;
   const proposalOption=$('statusFilter').querySelector('option[value="auto_boxes"]');
-  if(proposalOption)proposalOption.textContent='自动框 · 待审核（'+(proposals?.pending||0)+'）';
-  $('reviewKind').hidden=!$('statusFilter').value.startsWith('error_review');
+  if(proposalOption)proposalOption.textContent='待我审核 · 自动框（'+(proposals?.pending||0)+'）';
   const errorOption=$('statusFilter').querySelector('option[value="error_review"]');
   if(errorOption)errorOption.textContent='错例待复核 / 补标（'+(state.error_review_counts?.pending||0)+'）';
+  renderStatusControls();
   $('scanStatus').textContent=state.scan.running?'后台扫描中，已发现 '+state.scan.found+' 张；可以先分类已索引图片。':state.scan.error||'目录索引已更新 · 原图按需读取 · 预览缓存上限 256MB';
   $('scanStatus').classList.toggle('error',!!state.scan.error);
   $('rescan').disabled=state.scan.running;$('openRoot').disabled=state.scan.running;
@@ -420,7 +444,9 @@ async function poll(){
 }
 on('openRoot','click',async()=>{await saveDraft();const state=await api('/api/root',{path:$('rootPath').value});S.root=state.root;S.selected.clear();renderSelection();await refreshState();await reload({target:state.root.last_image});});
 on('rescan','click',async()=>{await api('/api/scan',{});await refreshState();});
-on('statusFilter','change',()=>{$('reviewKind').hidden=!$('statusFilter').value.startsWith('error_review');S.selected.clear();renderSelection();return reload();});on('reviewKind','change',()=>reload());on('search','input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>reload().catch(fail),300);});
+on('statusFilter','change',()=>changeStatusFilter($('statusFilter').value));
+for(const button of $('commonStatusFilters').querySelectorAll('button[data-status]'))button.addEventListener('click',()=>changeStatusFilter(button.dataset.status)?.catch(fail));
+on('reviewKind','change',()=>reload());on('search','input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>reload().catch(fail),300);});
 on('clearFilters','click',()=>{S.filters.defect.clear();S.filters.responsibility.clear();return reload();});
 on('thumbViewport','scroll',scheduleRender);window.addEventListener('resize',scheduleRender);
 on('note','input',()=>{if(S.current){S.current.label.note=$('note').value;edited();}});
@@ -509,7 +535,8 @@ document.addEventListener('keydown',e=>{
 window.addEventListener('beforeunload',e=>{if(S.dirty){e.preventDefault();e.returnValue='';}});
 document.addEventListener('click',e=>{for(const details of document.querySelectorAll('.add-tag-details[open],#contextDetails[open],#responsibilityMatrix[open]'))if(!details.contains(e.target))details.open=false;});
 const launchStatus=new URLSearchParams(location.search).get('status');
-if(['error_review','error_reviewed','annotation_pending','annotated','auto_boxes'].includes(launchStatus))$('statusFilter').value=launchStatus;
+if(launchStatus&&[...$('statusFilter').options].some(option=>option.value===launchStatus))$('statusFilter').value=launchStatus;
+renderStatusControls();
 (async()=>{
   const state=await refreshState();scanWasRunning=state.scan.running;lastIndexed=state.counts.total;
   await reload();S.loaded=true;poll();

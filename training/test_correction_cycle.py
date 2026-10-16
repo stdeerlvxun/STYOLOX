@@ -162,7 +162,8 @@ class CycleProtectionTests(unittest.TestCase):
 
     def test_twenty_reviewed_images_with_fourteen_train_trigger_exactly_one_round(self):
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory);path = root/'private.json';worker.atomic_json(path, config(root))
+            root = Path(directory);path = root/'private.json'
+            worker.atomic_json(path,{**config(root),'class_agnostic':True,'fixed_threshold':.05})
             payload = {'items':[item(i, i) for i in range(1, 21)]}
             records = [{'image_id':row['image_id'], 'sha256':'source',
                         'split':'train' if row['image_id']<=14 else 'validation',
@@ -181,7 +182,7 @@ class CycleProtectionTests(unittest.TestCase):
                     report['candidate']['model_sha256'] = hashlib.sha256((run/'detector.pt').read_bytes()).hexdigest()
                     worker.atomic_json(run/'validation-comparison.json', report)
                 else:
-                    trained.append(run);run.mkdir();(run/'detector.pt').write_bytes(b'trained')
+                    trained.append((run,arguments));run.mkdir();(run/'detector.pt').write_bytes(b'trained')
                     worker.atomic_json(run/'metrics.json', {'test':None, 'test_evaluation_pending':True,
                         'model_sha256':hashlib.sha256(b'trained').hexdigest(), 'validation':{'f2':.3}})
                 return ''
@@ -197,6 +198,8 @@ class CycleProtectionTests(unittest.TestCase):
                 self.assertEqual(second['status'], 'waiting_for_confirmed_images')
                 self.assertEqual(second['pending_confirmed_images'], 0)
                 self.assertEqual(len(trained), 1)
+                self.assertIn('--class-agnostic',trained[0][1])
+                self.assertEqual(trained[0][1][trained[0][1].index('--fixed-threshold')+1],'0.05')
                 marker = [call.args[1] for call in remote.call_args_list if 'record_feedback_training.py' in str(call)]
                 self.assertEqual(len(marker), 1)
                 self.assertEqual(marker[0][marker[0].index('--feedback-ids')+1], ','.join(map(str, range(1, 15))))

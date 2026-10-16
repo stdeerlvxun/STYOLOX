@@ -14,17 +14,27 @@ import uuid
 from PIL import Image,ImageOps
 
 
-def normalize_predictions(predictions,allowed,max_boxes=10):
+def normalize_predictions(predictions,allowed,max_boxes=10,class_agnostic=False):
+    # A location-only detector must never invent one of several issue types.
+    if class_agnostic and len(allowed)!=1:return []
     boxes=[]
     for prediction in sorted(predictions,key=lambda p:p['score'],reverse=True):
-        if prediction.get('problem') not in allowed:continue
+        problem=next(iter(allowed)) if class_agnostic else prediction.get('problem')
+        if problem not in allowed:continue
         values=[float(v) for v in prediction['xywh']]
         score=float(prediction['score'])
         if not all(math.isfinite(v) for v in values+[score]):continue
         x,y,w,h=values
         x1,y1=max(0.,x),max(0.,y);x2,y2=min(1.,x+w),min(1.,y+h)
         if x2<=x1 or y2<=y1 or (x2-x1)*(y2-y1)>.9:continue
-        boxes.append({'id':'detector-'+uuid.uuid4().hex,'problem':prediction['problem'],
+        if class_agnostic:
+            duplicate=False
+            for previous in boxes:
+                overlap=max(0.,min(x2,previous['x']+previous['w'])-max(x1,previous['x']))*max(0.,min(y2,previous['y']+previous['h'])-max(y1,previous['y']))
+                union=(x2-x1)*(y2-y1)+previous['w']*previous['h']-overlap
+                if union>0 and overlap/union>.5:duplicate=True;break
+            if duplicate:continue
+        boxes.append({'id':'detector-'+uuid.uuid4().hex,'problem':problem,
             'x':x1,'y':y1,'w':x2-x1,'h':y2-y1,'score':score,'origin':'model'})
         if len(boxes)>=max_boxes:break
     return boxes
@@ -44,7 +54,7 @@ def select_generation_rows(rows,existing,refresh_pending=False):
     return selected,preserved
 
 
-def generate(snapshot,run,output,limit=None,device='cuda',source_root=None,refresh_pending=False):
+def generate(snapshot,run,output,limit=None,device='cuda',source_root=None,refresh_pending=False,location_first=False):
     from generate_box_proposals import select_images,safe_source_path
     from vision_classifier import NAS_ROOT,write_json
     from train_detector import load_detector
@@ -63,10 +73,14 @@ def generate(snapshot,run,output,limit=None,device='cuda',source_root=None,refre
     selection['pending_machine_suggestions_selected_for_refresh']=sum('replaces_proposal_id' in row for row in rows)
     if limit is not None:rows=rows[:limit]
     model=load_detector(run,device=device)
+    detector_class_agnostic=bool(getattr(model,'class_agnostic',False))
+    class_agnostic=detector_class_agnostic or bool(location_first)
     checkpoint=run/'detector.pt';model_sha=hashlib.sha256(checkpoint.read_bytes()).hexdigest()
     snapshot_sha=hashlib.sha256(snapshot.read_bytes()).hexdigest()
-    result={'schema_version':1,'model_id':'yolox-human-boxes-'+model_sha[:12],
-        'method':'yolox_supervised_human_boxes_v1','source_checkpoint_sha256':model_sha,
+    result={'schema_version':1,'model_id':('yolox-location-' if class_agnostic else 'yolox-human-boxes-')+model_sha[:12],
+        'method':'yolox_problem_location_v2' if class_agnostic else 'yolox_supervised_human_boxes_v1','source_checkpoint_sha256':model_sha,
+        'class_agnostic':detector_class_agnostic,'location_first_suggestions':class_agnostic,
+        'problem_name_source':'existing_single_human_image_label' if class_agnostic else 'detector_class_prediction',
         'source_snapshot_sha256':snapshot_sha,'is_trained_detector':True,
         'requires_human_review':True,'unreviewed_proposals_training_eligible':False,
         'trial_only':True,'quality_warning':'Small-sample detector trial; localization is not reliable enough for automatic acceptance.',
@@ -84,11 +98,14 @@ def generate(snapshot,run,output,limit=None,device='cuda',source_root=None,refre
             if row.get('sha256') and row['sha256']!=sha:raise ValueError('Source hash changed from snapshot')
             with Image.open(io.BytesIO(raw)) as image:source=ImageOps.exif_transpose(image).convert('RGB')
             predictions=model.predict_image(source)
-            boxes=normalize_predictions(predictions,set(row['problems']))
-            if not boxes:reasons['no_matching_problem_box_above_validation_cutoff']+=1
+            boxes=normalize_predictions(predictions,set(row['problems']),class_agnostic=class_agnostic)
+            if class_agnostic and len(set(row['problems']))!=1:
+                reasons['multiple_problem_types_require_human_assignment']+=1
+            elif not boxes:reasons['no_matching_problem_box_above_validation_cutoff']+=1
             item={'image_id':row['image_id'],'relative_path':row['relative_path'],
                 'label_fingerprint':row['label_fingerprint'],'source':{'sha256':sha,'width':source.width,'height':source.height},
-                'boxes':boxes,'note':'YOLOX 试验位置建议，需逐框审核；已有问题分类保持不变。'}
+                'boxes':boxes,'note':('模型仅建议问题位置；问题名称沿用这张图唯一的人工问题分类，并非模型重新判断类型。请确认位置，已有分类保持不变。'
+                    if class_agnostic else 'YOLOX 试验位置建议，需逐框审核；已有问题分类保持不变。')}
             if row.get('replaces_proposal_id'):
                 item.update(replaces_proposal_id=row['replaces_proposal_id'],withdraw_if_empty=not boxes)
             result['items'].append(item)
@@ -113,4 +130,5 @@ if __name__=='__main__':
     parser.add_argument('--output',type=Path,required=True);parser.add_argument('--limit',type=int)
     parser.add_argument('--device',default='cuda');parser.add_argument('--source-root',type=Path)
     parser.add_argument('--refresh-pending',action='store_true',help='Explicitly refresh only current unedited pending machine suggestions')
-    args=parser.parse_args();generate(args.snapshot,args.run,args.output,args.limit,args.device,args.source_root,args.refresh_pending)
+    parser.add_argument('--location-first',action='store_true',help='Use locations from any detector issue class; require one existing human issue type and retain it as context')
+    args=parser.parse_args();generate(args.snapshot,args.run,args.output,args.limit,args.device,args.source_root,args.refresh_pending,args.location_first)

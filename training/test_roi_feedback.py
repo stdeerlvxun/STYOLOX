@@ -30,6 +30,33 @@ class NormalRegionFeedbackTests(unittest.TestCase):
         loss.sum().backward()
         self.assertEqual(logits.grad.flatten().tolist(), [1., 1., 0., 0.])
 
+    def test_bounded_normal_roi_total_does_not_grow_with_anchor_count(self):
+        for anchors in (1, 91, 1000):
+            truth = torch.zeros((anchors, 1))
+            centers = torch.ones((anchors, 2))
+            result = region_objectness_loss(torch.ones_like(truth), truth, [True],
+                [[[0, 0, 2, 2]]], centers, weight=.25, bounded=True)
+            self.assertAlmostEqual(result.sum().item(), .25, places=6)
+
+    def test_bounded_roi_respects_yolox_foreground_denominator_and_positives(self):
+        truth = torch.tensor([[1.], [1.], [0.], [0.], [0.]])
+        value = region_objectness_loss(torch.ones_like(truth), truth, [True],
+            [[[0, 0, 2, 2]]], torch.ones((5, 2)), weight=.25, bounded=True)
+        self.assertEqual(value[:2].flatten().tolist(), [1., 1.])
+        self.assertAlmostEqual(value[2:].sum().item() / 2, .25, places=6)
+
+    def test_bounded_roi_does_not_reweight_complete_image_background(self):
+        truth = torch.tensor([[0.], [1.]])
+        value = region_objectness_loss(torch.ones_like(truth), truth, [False],
+            [[[0, 0, 2, 2]]], torch.ones((2, 2)), weight=.25, bounded=True)
+        self.assertEqual(value.flatten().tolist(), [1., 1.])
+
+    def test_one_class_classification_bce_is_not_mistaken_for_objectness(self):
+        truth = torch.ones((3, 1))
+        value = region_objectness_loss(torch.ones_like(truth), truth, [True, True],
+            [[], []], torch.ones((10, 2)), weight=.25, bounded=True)
+        self.assertEqual(value.sum().item(), 3.)
+
     def test_complete_positive_images_and_classification_loss_unchanged(self):
         truth = torch.tensor([[0.], [1.]])
         self.assertEqual(region_objectness_loss(torch.ones_like(truth), truth, [False]).flatten().tolist(), [1., 1.])

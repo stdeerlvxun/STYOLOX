@@ -192,11 +192,23 @@ def anchor_centers(input_size, device, strides=(8, 16, 32)):
     return torch.cat(centers)
 
 
-def region_objectness_loss(loss, targets, partial_images, roi_batches=None, centers=None, weight=2.):
-    """Restore weighted negative objectness only inside explicit normal ROIs; positives win."""
+def region_objectness_loss(loss, targets, partial_images, roi_batches=None, centers=None, weight=2.,
+                           bounded=False):
+    """Restore local negatives; optionally bound their post-YOLOX-normalization mass.
+
+    YOLOX divides the summed objectness BCE by max(num_foreground, 1). An ROI-only
+    batch therefore must not sum dozens of negative anchors at full weight. In
+    bounded mode the auxiliary ROI contribution, after that division, is at most
+    ``weight * mean(ROI BCE)``. Positive and ordinary fully boxed supervision is
+    unchanged. Unknown regions on partial images remain ignored.
+    """
     if not partial_images or targets.ndim != 2 or targets.shape[-1] != 1:
         return loss
     batch = len(partial_images)
+    # YOLOX reuses the BCE module for classification. A one-class head has the
+    # same last dimension but only foreground rows, not the full anchor grid.
+    if centers is not None and targets.shape[0] != batch * len(centers):
+        return loss
     if targets.shape[0] % batch:
         raise ValueError('Unexpected flattened objectness anchor count')
     truth = targets.reshape(batch, -1, 1)
@@ -205,10 +217,20 @@ def region_objectness_loss(loss, targets, partial_images, roi_batches=None, cent
     if roi_batches and any(roi_batches):
         if centers is None or len(centers) != truth.shape[1]:
             raise ValueError('ROI anchor geometry mismatch')
+        restored = torch.zeros_like(truth, dtype=torch.bool)
         for index, rois in enumerate(roi_batches):
             normal = torch.zeros(len(centers), dtype=torch.bool, device=targets.device)
             for x1, y1, x2, y2 in rois:
                 normal |= (centers[:, 0] >= x1) & (centers[:, 0] < x2) & (centers[:, 1] >= y1) & (centers[:, 1] < y2)
             # Assigned positive anchors are never suppressed or reweighted by normal feedback.
-            scale[index, normal & (truth[index, :, 0] == 0), 0] = weight
+            negative = normal & (truth[index, :, 0] == 0)
+            if bounded:
+                # Complete images already provide ordinary background loss. Only
+                # restore masked unknown anchors inside explicit normal regions.
+                restored[index, negative, 0] = partial_images[index]
+            else:
+                scale[index, negative, 0] = weight
+        if bounded and restored.any():
+            foreground_denominator = max(float((truth > 0).sum()), 1.)
+            scale[restored] = weight * foreground_denominator / int(restored.sum())
     return loss * scale.reshape_as(loss)
