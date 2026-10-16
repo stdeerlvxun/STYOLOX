@@ -79,6 +79,95 @@ class LocalizationTest(unittest.TestCase):
             self.store.annotations.save(self.id,body)
             self.assertFalse(self.store.annotations.export()['items'][0]['training_eligible_by_label_policy'])
 
+    def negative(self):
+        return {'id':'hole1','x':.65,'y':.1,'w':.1,'h':.1,'reason':'process_hole','source_box_id':'machine-hole'}
+
+    def test_confirmed_negative_region_is_local_and_old_client_preserves_it(self):
+        before=self.human();body=self.payload();body['negative_regions']=[self.negative()]
+        result=self.store.annotations.save(self.id,body)
+        self.assertEqual(result['document']['negative_regions'],[self.negative()])
+        old_client=self.payload();self.store.annotations.save(self.id,old_client)
+        self.assertEqual(self.store.annotations.detail(self.id)['document']['negative_regions'],[self.negative()])
+        exported=self.store.annotations.feedback_export()['items']
+        self.assertEqual(len(exported),2)
+        self.assertFalse(exported[0]['training_eligible_by_label_policy'])
+        self.assertTrue(exported[1]['training_eligible_by_label_policy'])
+        self.assertTrue(exported[1]['source_sha256_verified'])
+        self.assertFalse(exported[1]['feedback']['whole_image_normal'])
+        self.assertEqual(self.human(),before)
+
+    def test_draft_negative_region_never_becomes_training_feedback(self):
+        body=self.payload();body.update(status='draft',negative_regions=[self.negative()])
+        self.store.annotations.save(self.id,body)
+        self.assertEqual(self.store.annotations.feedback_export()['items'],[])
+        self.assertFalse(self.store.annotations.export()['items'][0]['training_eligible_by_label_policy'])
+
+    def test_negative_only_confirmation_and_overlap_protection(self):
+        body=self.payload();body.update(boxes=[],outcome='needs_correction',negative_regions=[self.negative()])
+        result=self.store.annotations.save(self.id,body)
+        self.assertEqual(result['document']['outcome'],'needs_correction')
+        self.assertTrue(self.store.annotations.feedback_export()['items'][0]['training_eligible_by_label_policy'])
+        conflicting=self.payload();conflicting['boxes'][0].update(x=.65,y=.1,w=.1,h=.1)
+        with self.assertRaisesRegex(ValueError,'明显重叠'):self.store.annotations.save(self.id,conflicting)
+        self.assertEqual(self.store.annotations.detail(self.id)['version'],1)
+
+    def test_standalone_region_feedback_preserves_manual_annotations_and_is_idempotent(self):
+        self.store.annotations.save(self.id,self.payload())
+        before=self.human();annotation_before=annotation_digest(self.store.db)
+        body=self.payload();body['negative_regions']=[self.negative()]
+        first=self.store.annotations.save_feedback(self.id,body)
+        second=self.store.annotations.save_feedback(self.id,body)
+        self.assertEqual(first['feedback_id'],second['feedback_id'])
+        self.assertEqual(self.human(),before)
+        self.assertEqual(annotation_digest(self.store.db),annotation_before)
+        state=self.store.annotations.feedback_state()
+        self.assertEqual(state['confirmed_regions'],1)
+        self.assertEqual(state['pending_training_images'],1)
+        self.assertFalse(state['automatic_online_weight_updates'])
+        feedback_ids=[r['feedback_id'] for r in self.store.annotations.feedback_export()['items']]
+        self.store.annotations.record_feedback_training('trained-real-run',feedback_ids,'a'*64)
+        self.assertEqual(self.store.annotations.feedback_state()['pending_training_feedback'],0)
+
+    def test_negative_feedback_retains_source_label_and_draft_training_exclusions(self):
+        body=self.payload();body['negative_regions']=[self.negative()]
+        self.store.annotations.save_feedback(self.id,body)
+        self.store.save_draft(self.id,{**self.label,'note':'尚未确认'})
+        item=self.store.annotations.feedback_export()['items'][0]
+        self.assertFalse(item['training_eligible_by_label_policy'])
+        self.assertIn('classification_draft',item['exclusion_reasons'])
+        with self.store.db:self.store.db.execute('DELETE FROM drafts WHERE image_id=?',(self.id,))
+        self.store.commit([(self.id,{**self.label,'defects':[],'image_state':'unclear'})])
+        item=self.store.annotations.feedback_export()['items'][0]
+        self.assertFalse(item['training_eligible_by_label_policy'])
+        self.assertIn('classification_policy_excluded',item['exclusion_reasons'])
+        self.assertIn('classification_changed',item['exclusion_reasons'])
+        with self.assertRaisesRegex(ValueError,'人工分类已更新'):self.store.annotations.save_feedback(self.id,body)
+        Image.new('RGB',(400,200),'black').save(self.source/'board.jpg')
+        item=self.store.annotations.feedback_export()['items'][0]
+        self.assertFalse(item['source_sha256_verified'])
+
+    def test_invalid_negative_region_never_writes(self):
+        for field,value in [('reason','unknown'),('x',float('nan')),('w',0),('h',True),('x',.99)]:
+            body=self.payload();region=self.negative();region[field]=value;body['negative_regions']=[region]
+            with self.assertRaises(ValueError):self.store.annotations.save(self.id,body)
+        self.assertEqual(self.store.annotations.feedback_export()['items'],[])
+        self.assertEqual(self.store.query('SELECT * FROM annotation_documents'),[])
+
+    def test_human_feedback_import_helper_preserves_frames_and_original_classification(self):
+        from deployment.import_annotation_feedback import install
+        self.store.annotations.save(self.id,self.payload());detail=self.store.annotations.detail(self.id)
+        manifest={'schema_version':1,'type':'human_reported_local_false_positive','image_id':self.id,
+            'whole_image_normal':False,'label_scope':'region_only','source':detail['source'],
+            'original_classification_fingerprint':detail['label_fingerprint'],
+            'rejected_region':{**self.negative(),'id':'model-hole','problem':'其他破损'}}
+        path=self.base/'human-feedback.json';path.write_text(json.dumps(manifest),encoding='utf-8')
+        before=self.human(),annotation_digest(self.store.db)
+        result=install(self.store.data_dir,path)
+        self.assertTrue(result['saved']);self.assertEqual((self.human(),annotation_digest(self.store.db)),before)
+        item=self.store.annotations.feedback_export()['items'][-1]
+        self.assertEqual(item['feedback']['negative_regions'][0]['reason'],'process_hole')
+        self.assertTrue(item['training_eligible_by_label_policy'])
+
     def test_responsibility_prior_deduplicates_cases_and_preserves_rules(self):
         original=self.store.image(self.id)
         with self.store.db:

@@ -30,7 +30,21 @@ def normalize_predictions(predictions,allowed,max_boxes=10):
     return boxes
 
 
-def generate(snapshot,run,output,limit=None,device='cuda',source_root=None):
+def select_generation_rows(rows,existing,refresh_pending=False):
+    """Only unedited, current pending suggestions can be explicitly refreshed."""
+    selected=[];preserved=0
+    for row in rows:
+        previous=existing.get(row['image_id'])
+        if previous is None:
+            selected.append(dict(row));continue
+        if (refresh_pending and previous['status']=='pending'
+            and previous.get('label_fingerprint')==row['label_fingerprint']):
+            selected.append({**row,'replaces_proposal_id':previous['proposal_id']})
+        else:preserved+=1
+    return selected,preserved
+
+
+def generate(snapshot,run,output,limit=None,device='cuda',source_root=None,refresh_pending=False):
     from generate_box_proposals import select_images,safe_source_path
     from vision_classifier import NAS_ROOT,write_json
     from train_detector import load_detector
@@ -39,10 +53,14 @@ def generate(snapshot,run,output,limit=None,device='cuda',source_root=None):
     root=Path(source_root) if source_root else NAS_ROOT
     rows,selection=select_images(snapshot)
     db=sqlite3.connect(snapshot.resolve().as_uri()+'?mode=ro',uri=True)
-    try:existing={r[0] for r in db.execute('SELECT image_id FROM annotation_proposals')}
+    try:
+        existing={r[0]:{'proposal_id':r[1],'status':r[2],
+            'label_fingerprint':json.loads(r[3]).get('label_fingerprint')}
+            for r in db.execute('SELECT image_id,proposal_id,status,data FROM annotation_proposals')}
     finally:db.close()
-    selection['existing_machine_suggestions_preserved']=sum(row['image_id'] in existing for row in rows)
-    rows=[row for row in rows if row['image_id'] not in existing]
+    rows,preserved=select_generation_rows(rows,existing,refresh_pending)
+    selection['existing_machine_suggestions_preserved']=preserved
+    selection['pending_machine_suggestions_selected_for_refresh']=sum('replaces_proposal_id' in row for row in rows)
     if limit is not None:rows=rows[:limit]
     model=load_detector(run,device=device)
     checkpoint=run/'detector.pt';model_sha=hashlib.sha256(checkpoint.read_bytes()).hexdigest()
@@ -54,6 +72,7 @@ def generate(snapshot,run,output,limit=None,device='cuda',source_root=None):
         'trial_only':True,'quality_warning':'Small-sample detector trial; localization is not reliable enough for automatic acceptance.',
         'classification_results_modified':False,'source_images_modified':False,
         'coordinate_space':'exif_transposed_normalized_xywh','probabilities_calibrated':False,
+        'refresh_pending':bool(refresh_pending),
         'created_at':dt.datetime.now(dt.timezone.utc).isoformat(),'selection':selection,'items':[],'errors':[]}
     reasons=Counter();started=time.perf_counter()
     for index,row in enumerate(rows):
@@ -67,9 +86,12 @@ def generate(snapshot,run,output,limit=None,device='cuda',source_root=None):
             predictions=model.predict_image(source)
             boxes=normalize_predictions(predictions,set(row['problems']))
             if not boxes:reasons['no_matching_problem_box_above_validation_cutoff']+=1
-            result['items'].append({'image_id':row['image_id'],'relative_path':row['relative_path'],
+            item={'image_id':row['image_id'],'relative_path':row['relative_path'],
                 'label_fingerprint':row['label_fingerprint'],'source':{'sha256':sha,'width':source.width,'height':source.height},
-                'boxes':boxes,'note':'YOLOX 试验位置建议，定位尚不稳定，需逐框审核；已有问题分类保持不变。'})
+                'boxes':boxes,'note':'YOLOX 试验位置建议，需逐框审核；已有问题分类保持不变。'}
+            if row.get('replaces_proposal_id'):
+                item.update(replaces_proposal_id=row['replaces_proposal_id'],withdraw_if_empty=not boxes)
+            result['items'].append(item)
         except (OSError,ValueError,KeyError) as error:
             result['errors'].append({'image_id':row['image_id'],'error':str(error)})
         if (index+1)%25==0:
@@ -90,4 +112,5 @@ if __name__=='__main__':
     parser.add_argument('--snapshot',type=Path,required=True);parser.add_argument('--run',type=Path,required=True)
     parser.add_argument('--output',type=Path,required=True);parser.add_argument('--limit',type=int)
     parser.add_argument('--device',default='cuda');parser.add_argument('--source-root',type=Path)
-    args=parser.parse_args();generate(args.snapshot,args.run,args.output,args.limit,args.device,args.source_root)
+    parser.add_argument('--refresh-pending',action='store_true',help='Explicitly refresh only current unedited pending machine suggestions')
+    args=parser.parse_args();generate(args.snapshot,args.run,args.output,args.limit,args.device,args.source_root,args.refresh_pending)

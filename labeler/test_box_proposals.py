@@ -270,6 +270,91 @@ class BoxProposalTest(unittest.TestCase):
         self.assertEqual(self.store.annotations.proposal_state()['pending'], 0)
         self.assertEqual(self.human(), before)
 
+    def refresh_manifest(self, proposal, boxes=None):
+        manifest=self.manifest();manifest.update(model_id='next-detector-v2',refresh_pending=True)
+        manifest['items'][0]['replaces_proposal_id']=proposal['proposal_id']
+        if boxes is not None:manifest['items'][0]['boxes']=boxes
+        return manifest
+
+    def test_confirmed_corrections_capture_move_reclassify_delete_and_added_box(self):
+        manifest=self.manifest();second=copy.deepcopy(manifest['items'][0]['boxes'][0]);second.update(id='model-2',x=.65,w=.1,h=.1)
+        manifest['items'][0]['boxes'].append(second);self.store.annotations.install_proposals(manifest)
+        proposal=self.store.annotations.detail(self.id)['proposal'];body=self.payload(proposal)
+        body['boxes']=body['boxes'][:1];body['boxes'][0].update(x=.15,problem='崩边')
+        body['boxes'].append({'id':'manual-added','problem':'其他破损','x':.05,'y':.8,'w':.1,'h':.1})
+        body['negative_regions']=[{'id':'not-damage','source_box_id':'model-2','reason':'process_hole','x':.65,'y':.2,'w':.1,'h':.1}]
+        self.store.annotations.save(self.id,body)
+        events=self.store.annotations.feedback_export()['items'][0]['feedback']['events']
+        self.assertEqual([e['kind'] for e in events],['corrected','deleted','added'])
+        self.assertEqual(events[0]['changes'],['reclassified','moved'])
+        self.assertEqual(events[1]['reason'],'process_hole')
+
+    def test_all_false_positive_confirmation_rejects_candidate_but_does_not_mark_image_normal(self):
+        proposal=self.install();body=self.payload(proposal);old=proposal['boxes'][0]
+        body.update(boxes=[],outcome='needs_correction',negative_regions=[{**{k:old[k] for k in ('x','y','w','h')},
+            'id':'negative-1','reason':'process_hole','source_box_id':old['id']}])
+        before=self.human();self.store.annotations.save(self.id,body)
+        self.assertEqual(self.human(),before);self.assertEqual(self.store.annotations.proposal_state()['rejected'],1)
+        self.assertFalse(self.store.annotations.export()['items'][0]['training_eligible_by_label_policy'])
+        item=self.store.annotations.feedback_export()['items'][0]
+        self.assertTrue(item['training_eligible_by_label_policy']);self.assertFalse(item['feedback']['whole_image_normal'])
+
+    def test_refresh_pending_requires_expected_id_and_archives_previous_candidate(self):
+        proposal=self.install();before=self.human(),self.annotations()
+        manifest=self.refresh_manifest(proposal)
+        wrong=copy.deepcopy(manifest);wrong['items'][0]['replaces_proposal_id']='wrong'
+        result=self.store.annotations.install_proposals(wrong)
+        self.assertEqual((result['refreshed'],result['skipped']),(0,1))
+        result=self.store.annotations.install_proposals(manifest)
+        self.assertEqual((result['imported'],result['refreshed'],result['withdrawn']),(0,1,0))
+        self.assertEqual((self.human(),self.annotations()),before)
+        current=self.store.annotations.detail(self.id)['proposal']
+        self.assertEqual(current['model_id'],'next-detector-v2')
+        history=self.store.query('SELECT * FROM annotation_proposal_history')
+        self.assertEqual(history[0]['proposal_id'],proposal['proposal_id'])
+        self.assertEqual(history[0]['replaced_by'],current['proposal_id'])
+        result=self.store.annotations.install_proposals(manifest)
+        self.assertEqual(result['skipped'],1)
+
+    def test_empty_refresh_only_explicitly_withdraws_pending_and_keeps_audit(self):
+        proposal=self.install();before=self.human(),self.annotations()
+        manifest=self.refresh_manifest(proposal,boxes=[])
+        result=self.store.annotations.install_proposals(manifest);self.assertEqual(result['skipped'],1)
+        manifest['items'][0]['withdraw_if_empty']=True
+        result=self.store.annotations.install_proposals(manifest)
+        self.assertEqual((result['withdrawn'],result['refreshed'],result['imported']),(1,0,0))
+        self.assertEqual((self.human(),self.annotations()),before)
+        old=self.store.one('SELECT * FROM annotation_proposals WHERE image_id=?',(self.id,))
+        self.assertEqual(old['status'],'stale');self.assertEqual(old['proposal_id'],proposal['proposal_id'])
+        self.assertEqual(len(self.store.query('SELECT * FROM annotation_proposal_history')),1)
+
+    def test_refresh_never_overwrites_human_draft_accepted_rejected_or_stale(self):
+        proposal=self.install();manifest=self.refresh_manifest(proposal);before=self.human()
+        self.store.annotations.save(self.id,self.payload(proposal,status='draft'))
+        human_annotations=self.annotations()
+        result=self.store.annotations.install_proposals(manifest)
+        self.assertEqual(result['skipped'],1);self.assertEqual(self.annotations(),human_annotations)
+        with self.store.db:
+            self.store.db.execute('DELETE FROM annotation_documents WHERE image_id=?',(self.id,))
+        for status in ['accepted','rejected','stale']:
+            with self.store.db:self.store.db.execute('UPDATE annotation_proposals SET status=? WHERE image_id=?',(status,self.id))
+            result=self.store.annotations.install_proposals(manifest)
+            self.assertEqual(result['skipped'],1)
+            self.assertEqual(self.store.one('SELECT status FROM annotation_proposals WHERE image_id=?',(self.id,))['status'],status)
+        self.assertEqual(self.human(),before)
+
+    def test_refresh_transaction_rechecks_new_human_work_after_source_validation(self):
+        proposal=self.install();manifest=self.refresh_manifest(proposal);source=self.store.annotations.source
+        def edit_after_source(image_id):
+            result=source(image_id)
+            self.store.save_draft(image_id,{**self.label,'note':'编辑期间的草稿'})
+            return result
+        self.store.annotations.source=edit_after_source
+        result=self.store.annotations.install_proposals(manifest)
+        self.assertEqual((result['refreshed'],result['skipped']),(0,1))
+        self.assertEqual(self.store.one('SELECT proposal_id FROM annotation_proposals WHERE image_id=?',(self.id,))['proposal_id'],proposal['proposal_id'])
+        self.assertEqual(self.store.query('SELECT * FROM annotation_proposal_history'),[])
+
 
 if __name__ == '__main__':
     unittest.main()

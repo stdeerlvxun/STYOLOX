@@ -893,6 +893,10 @@ class Handler(BaseHTTPRequestHandler):
                 return self.send(self.app.store.annotations.export(),headers={'Content-Disposition':'attachment; filename="problem-localizations.json"'})
             if path == '/api/annotation-proposals/state':
                 return self.send(self.app.store.annotations.proposal_state())
+            if path == '/api/annotation-feedback/state':
+                return self.send(self.app.store.annotations.feedback_state())
+            if path == '/api/annotation-feedback/export':
+                return self.send(self.app.store.annotations.feedback_export(),headers={'Content-Disposition':'attachment; filename="annotation-feedback.json"'})
             if path == '/api/responsibility-links':
                 from annotations import responsibility_links
                 return self.send(responsibility_links(self.app.store,RESPONSIBILITY_RULES))
@@ -950,7 +954,9 @@ class Handler(BaseHTTPRequestHandler):
             elif path == '/api/annotations':
                 result = store.annotations.save(int(body['id']),body)
             elif path == '/api/annotation-proposals/reject':
-                result=store.annotations.reject_proposal(int(body['id']),body['proposal_id'])
+                result=store.annotations.reject_proposal(int(body['id']),body['proposal_id'],body)
+            elif path == '/api/annotation-feedback':
+                result=store.annotations.save_feedback(int(body['id']),body)
             elif path == "/api/batch":
                 result = store.batch(body["ids"], body["label"])
             elif path == "/api/review/unrelated":

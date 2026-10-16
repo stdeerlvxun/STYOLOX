@@ -142,7 +142,7 @@ def verify_no_leakage(records):
             seen[key] = row['split']
 
 
-def prepare(run, snapshot=None, source_root=NAS_ROOT, historical_path=DEFAULT_HISTORY):
+def prepare(run, snapshot=None, source_root=NAS_ROOT, historical_path=DEFAULT_HISTORY, roi_feedback_paths=None):
     run, source_root = Path(run), Path(source_root)
     target = run/'dataset.json'
     if target.exists():
@@ -248,10 +248,18 @@ def prepare(run, snapshot=None, source_root=NAS_ROOT, historical_path=DEFAULT_HI
                'first_detector_training': True,
                'annotation_selection_bias': 'Some human boxes originated from classifier-generated proposals and error review; this is not a random production test set.',
                'training_ready': True, 'evaluation_scope': 'Small-sample held-out human-confirmed boxes only; no general production accuracy claim'}
+    feedback = None
+    if roi_feedback_paths:
+        from roi_feedback import prepare_feedback
+        feedback = prepare_feedback(roi_feedback_paths, snapshot, source_root, records, historical)
+        summary['human_normal_roi_feedback'] = {k: v for k, v in feedback.items() if k != 'records'}
     dataset = {'schema_version': 1, 'training_policy': POLICY, 'source_root': str(source_root),
                'snapshot_path': str(snapshot), 'snapshot_sha256': snapshot_hash,
                'created_at': dt.datetime.now(dt.timezone.utc).isoformat(), 'categories': categories,
                'summary': summary, 'split_audit': split_audit, 'records': records, 'excluded': excluded}
+    if feedback is not None:
+        dataset['negative_feedback_records'] = feedback['records']
+        dataset['included_feedback_ids'] = feedback['included_feedback_ids']
     write_json(target, dataset)
     write_json(run/'data-summary.json', summary)
     return dataset
@@ -263,6 +271,9 @@ if __name__ == '__main__':
     parser.add_argument('--snapshot', type=Path)
     parser.add_argument('--source-root', type=Path, default=NAS_ROOT)
     parser.add_argument('--historical', type=Path, default=DEFAULT_HISTORY)
+    parser.add_argument('--roi-feedback', type=Path, action='append', default=[])
+    parser.add_argument('--feedback-json', type=Path, action='append', default=[],
+                        help='Confirmed /api/annotation-feedback/export JSON; revalidated against this snapshot and NAS')
     args = parser.parse_args()
-    result = prepare(args.run, args.snapshot, args.source_root, args.historical)
+    result = prepare(args.run, args.snapshot, args.source_root, args.historical, args.roi_feedback+args.feedback_json)
     print(json.dumps(result['summary'], ensure_ascii=True), flush=True)

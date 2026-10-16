@@ -1,6 +1,6 @@
 import math
 import unittest
-from generate_detector_proposals import normalize_predictions
+from generate_detector_proposals import normalize_predictions,select_generation_rows
 
 
 class DetectorProposalTests(unittest.TestCase):
@@ -22,6 +22,21 @@ class DetectorProposalTests(unittest.TestCase):
         self.assertEqual(len(result),2);self.assertEqual(result[0]['x'],0)
         self.assertAlmostEqual(result[0]['h'],.1)
         self.assertNotEqual(result[0]['id'],result[1]['id'])
+
+    def test_default_generation_preserves_all_existing_candidates(self):
+        rows=[{'image_id':1,'label_fingerprint':'a'},{'image_id':2,'label_fingerprint':'b'}]
+        selected,preserved=select_generation_rows(rows,{1:{'status':'pending','proposal_id':'old','label_fingerprint':'a'}})
+        self.assertEqual([r['image_id'] for r in selected],[2]);self.assertEqual(preserved,1)
+
+    def test_refresh_only_current_pending_not_human_rejections_or_stale_labels(self):
+        rows=[{'image_id':i,'label_fingerprint':'current'} for i in range(1,6)]
+        existing={i:{'status':status,'proposal_id':'p'+str(i),'label_fingerprint':fp}
+            for i,status,fp in [(1,'pending','current'),(2,'accepted','current'),
+                (3,'rejected','current'),(4,'stale','current'),(5,'pending','old-label')]}
+        selected,preserved=select_generation_rows(rows,existing,True)
+        self.assertEqual([r['image_id'] for r in selected],[1]);self.assertEqual(preserved,4)
+        self.assertEqual(selected[0]['replaces_proposal_id'],'p1')
+        self.assertNotIn('replaces_proposal_id',rows[0],'Do not modify the source snapshot records')
 
 
 if __name__=='__main__':unittest.main()

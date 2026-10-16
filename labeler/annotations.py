@@ -12,6 +12,56 @@ def fingerprint(value):
     return hashlib.sha256((value or '').encode('utf-8')).hexdigest()
 
 
+def clean_negative_regions(regions):
+    if not isinstance(regions,list) or len(regions)>100:raise ValueError('每张图片最多100个纠错区域')
+    result=[];identities=set()
+    for region in regions:
+        if not isinstance(region,dict):raise ValueError('纠错区域格式不正确')
+        identity=region.get('id');reason=region.get('reason')
+        if not isinstance(identity,str) or not identity or len(identity)>80 or identity in identities:
+            raise ValueError('纠错区域标识不正确')
+        if reason not in ('process_hole','normal_structure','false_positive'):raise ValueError('纠错原因不正确')
+        values=[region.get(k) for k in ('x','y','w','h')]
+        if any(type(v) not in (int,float) or not math.isfinite(v) for v in values):raise ValueError('纠错坐标不正确')
+        x,y,w,h=values
+        if min(x,y)<0 or min(w,h)<=0 or x+w>1.000001 or y+h>1.000001:raise ValueError('纠错区域必须位于原图内')
+        item=dict(id=identity,x=x,y=y,w=min(w,1-x),h=min(h,1-y),reason=reason)
+        source_id=region.get('source_box_id')
+        if source_id is not None:
+            if not isinstance(source_id,str) or not source_id or len(source_id)>80:raise ValueError('原建议框标识不正确')
+            item['source_box_id']=source_id
+        result.append(item);identities.add(identity)
+    return result
+
+
+def reject_conflicting_regions(boxes, regions):
+    for positive in boxes:
+        for negative in regions:
+            width=max(0,min(positive['x']+positive['w'],negative['x']+negative['w'])-max(positive['x'],negative['x']))
+            height=max(0,min(positive['y']+positive['h'],negative['y']+negative['h'])-max(positive['y'],negative['y']))
+            if width*height/min(positive['w']*positive['h'],negative['w']*negative['h'])>=.5:
+                raise ValueError('问题框与正常结构纠错区域明显重叠，请调整后确认')
+
+
+def correction_events(proposal, boxes, regions):
+    original={box['id']:box for box in proposal.get('boxes',[])}
+    final={box.get('source_box_id',box['id']):box for box in boxes};negative={r.get('source_box_id'):r for r in regions}
+    result=[]
+    for identity,box in original.items():
+        current=final.get(identity)
+        if current is None:
+            result.append({'kind':'deleted','source_box_id':identity,'before':box,
+                           'reason':negative.get(identity,{}).get('reason','not_confirmed_as_defect')})
+            continue
+        changes=[]
+        if current['problem']!=box['problem']:changes.append('reclassified')
+        if any(abs(current[k]-box[k])>1e-6 for k in ('x','y','w','h')):changes.append('moved')
+        result.append({'kind':'corrected' if changes else 'accepted','source_box_id':identity,
+                       'changes':changes,'before':box,'after':current})
+    result.extend({'kind':'added','after':box} for identity,box in final.items() if identity not in original)
+    return result
+
+
 class Annotations:
     def __init__(self, store):
         self.store = store
@@ -31,6 +81,17 @@ class Annotations:
                   image_id INTEGER PRIMARY KEY REFERENCES images(id),proposal_id TEXT UNIQUE NOT NULL,
                   data TEXT NOT NULL,label_data TEXT NOT NULL,status TEXT NOT NULL DEFAULT 'pending',
                   created_at TEXT NOT NULL,reviewed_at TEXT);
+                CREATE TABLE IF NOT EXISTS annotation_proposal_history(
+                  id INTEGER PRIMARY KEY,image_id INTEGER NOT NULL,proposal_id TEXT NOT NULL,
+                  data TEXT NOT NULL,label_data TEXT NOT NULL,status TEXT NOT NULL,
+                  created_at TEXT NOT NULL,reviewed_at TEXT,archived_at TEXT NOT NULL,replaced_by TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS annotation_feedback(
+                  id INTEGER PRIMARY KEY,image_id INTEGER NOT NULL REFERENCES images(id),
+                  identity TEXT UNIQUE NOT NULL,data TEXT NOT NULL,created_at TEXT NOT NULL);
+                CREATE TABLE IF NOT EXISTS annotation_feedback_training(
+                  id INTEGER PRIMARY KEY,feedback_id INTEGER NOT NULL REFERENCES annotation_feedback(id),
+                  run_id TEXT NOT NULL,model_sha256 TEXT NOT NULL,created_at TEXT NOT NULL,
+                  UNIQUE(feedback_id,run_id));
             ''')
 
     def proposal_match(self, alias='p', include_annotations=False):
@@ -68,7 +129,9 @@ class Annotations:
         return {**data,'proposal_id':row['proposal_id'],'status':row['status'],
                 'source_sha256':data['source']['sha256'],'requires_human_review':True}
 
-    def install_proposals(self, manifest):
+    def install_proposals(self, manifest, refresh_pending=False):
+        refresh_pending=manifest.get('refresh_pending',refresh_pending)
+        if type(refresh_pending) is not bool:raise ValueError('刷新建议参数不正确')
         if manifest.get('schema_version')!=1 or manifest.get('requires_human_review') is not True:
             raise ValueError('自动框必须标记为待人工审核')
         model_id,method=manifest.get('model_id'),manifest.get('method')
@@ -82,6 +145,9 @@ class Annotations:
         for item in items:
             try:
                 image_id=item['image_id']
+                replaces=item.get('replaces_proposal_id')
+                if replaces is not None and (not refresh_pending or not isinstance(replaces,str) or not replaces or len(replaces)>80):
+                    raise ValueError('需要指定待替换建议版本')
                 if type(image_id) is not int:raise ValueError('图片标识不正确')
                 image=self.store.image(image_id)
                 if image['relative_path']!=item['relative_path']:raise ValueError('原图路径不一致')
@@ -96,7 +162,8 @@ class Annotations:
                 if any(item['source'][k]!=source[k] for k in ('sha256','width','height')):
                     raise ValueError('自动框原图不一致')
                 boxes=item.get('boxes')
-                if not isinstance(boxes,list) or not boxes or len(boxes)>100:raise ValueError('没有有效自动框')
+                withdraw=bool(refresh_pending and replaces and item.get('withdraw_if_empty') is True and boxes==[])
+                if not isinstance(boxes,list) or (not boxes and not withdraw) or len(boxes)>100:raise ValueError('没有有效自动框')
                 clean=[];box_ids=set()
                 for box in boxes:
                     identity=box.get('id');problem=box.get('problem');values=[box.get(k) for k in ('x','y','w','h')]
@@ -117,33 +184,51 @@ class Annotations:
                       'coordinate_space':'exif_transposed_normalized_xywh','requires_human_review':True}
                 identity=fingerprint(json.dumps(data,sort_keys=True,ensure_ascii=False))[:32]
                 for box in clean:box['proposal_id']=identity
-                prepared.append((image_id,identity,data,label['data']))
+                prepared.append((image_id,identity,data,label['data'],replaces))
             except (ValueError,KeyError,TypeError,OSError):
                 skipped+=1
-        imported=0
+        imported=0;refreshed=0;withdrawn=0
         with self.store.lock,self.store.db:
             self.store.db.execute('BEGIN IMMEDIATE')
             from deployment.snapshot import digest,annotation_digest
             before=digest(self.store.db);annotations_before=annotation_digest(self.store.db)
-            for image_id,identity,data,label_raw in prepared:
+            for image_id,identity,data,label_raw,replaces in prepared:
                 current=self.store.one('SELECT data FROM labels WHERE image_id=?',(image_id,))
                 if (not current or current['data']!=label_raw
                     or self.store.one('SELECT image_id FROM drafts WHERE image_id=?',(image_id,))
-                    or self.store.one('SELECT image_id FROM annotation_documents WHERE image_id=?',(image_id,))
-                    or self.store.one('SELECT image_id FROM annotation_proposals WHERE image_id=?',(image_id,))):
+                    or self.store.one('SELECT image_id FROM annotation_documents WHERE image_id=?',(image_id,))):
+                    skipped+=1;continue
+                old=self.store.one('SELECT * FROM annotation_proposals WHERE image_id=?',(image_id,))
+                if old:
+                    old_data=json.loads(old['data'])
+                    if (not refresh_pending or not replaces or old['proposal_id']!=replaces or old['status']!='pending'
+                        or old['label_data']!=label_raw or old_data['source']['sha256']!=data['source']['sha256']):
+                        skipped+=1;continue
+                    stamp=dt.datetime.now(dt.timezone.utc).isoformat()
+                    self.store.db.execute('INSERT INTO annotation_proposal_history(image_id,proposal_id,data,label_data,status,created_at,reviewed_at,archived_at,replaced_by) VALUES(?,?,?,?,?,?,?,?,?)',
+                        (image_id,old['proposal_id'],old['data'],old['label_data'],old['status'],old['created_at'],old['reviewed_at'],stamp,identity))
+                    if not data['boxes']:
+                        self.store.db.execute("UPDATE annotation_proposals SET status='stale',reviewed_at=? WHERE image_id=? AND proposal_id=? AND status='pending'",(stamp,image_id,replaces))
+                        withdrawn+=1;continue
+                    self.store.db.execute("UPDATE annotation_proposals SET proposal_id=?,data=?,label_data=?,status='pending',created_at=?,reviewed_at=NULL WHERE image_id=? AND proposal_id=? AND status='pending'",
+                        (identity,json.dumps(data,ensure_ascii=False,separators=(',',':')),label_raw,stamp,image_id,replaces))
+                    refreshed+=1;continue
+                if replaces or not data['boxes']:
                     skipped+=1;continue
                 self.store.db.execute('INSERT INTO annotation_proposals(image_id,proposal_id,data,label_data,created_at) VALUES(?,?,?,?,?)',
                     (image_id,identity,json.dumps(data,ensure_ascii=False,separators=(',',':')),label_raw,dt.datetime.now(dt.timezone.utc).isoformat()))
                 imported+=1
             assert before==digest(self.store.db),'Human classifications changed'
             assert annotations_before==annotation_digest(self.store.db),'Human position annotations changed'
-        return {'imported':imported,'skipped':skipped,'human_classifications_unchanged':True,'human_annotations_unchanged':True,
+        return {'imported':imported,'refreshed':refreshed,'withdrawn':withdrawn,'skipped':skipped,'human_classifications_unchanged':True,'human_annotations_unchanged':True,
                 'human_digest':before,'annotation_digest':annotations_before}
 
-    def reject_proposal(self, image_id, proposal_id):
+    def reject_proposal(self, image_id, proposal_id, feedback=None):
         proposal=self.proposal(image_id,self.source(image_id))
         if not proposal or proposal['proposal_id']!=proposal_id:raise ValueError('建议已失效或已审核，请重新读取')
         with self.store.lock,self.store.db:
+            if feedback and feedback.get('negative_regions'):
+                self.save_feedback(image_id,{**feedback,'proposal_id':proposal_id,'status':'confirmed'})
             self.store.db.execute("UPDATE annotation_proposals SET status='rejected',reviewed_at=? WHERE image_id=? AND proposal_id=? AND status='pending'",
                 (dt.datetime.now(dt.timezone.utc).isoformat(),image_id,proposal_id))
         return {'rejected':True,'labels_unchanged':True,'annotations_unchanged':True}
@@ -170,7 +255,8 @@ class Annotations:
         source = self.source(image_id)
         row = self.store.one('SELECT * FROM annotation_documents WHERE image_id=?',(image_id,))
         label = self.store.one('SELECT data FROM labels WHERE image_id=?',(image_id,))
-        data = json.loads(row['data']) if row else {'boxes':[],'status':'draft','outcome':'boxed'}
+        data = json.loads(row['data']) if row else {'boxes':[],'negative_regions':[],'status':'draft','outcome':'boxed'}
+        data.setdefault('negative_regions',[])
         return {'image_id':image_id,'source':source,'document':data,'version':row['version'] if row else 0,
                 'source_changed':bool(row and data['source']['sha256']!=source['sha256']),
                 'label_fingerprint':fingerprint(label['data'] if label else ''),'review':self.review(image_id),
@@ -202,14 +288,20 @@ class Annotations:
             if box.get('origin')=='model':
                 if not proposal_id or box.get('proposal_id')!=proposal_id:raise ValueError('模型框来源不正确')
                 item.update(origin='model',proposal_id=proposal_id)
+                if box.get('source_box_id') is not None:
+                    if not isinstance(box['source_box_id'],str) or not box['source_box_id'] or len(box['source_box_id'])>80:
+                        raise ValueError('原建议框标识不正确')
+                    item['source_box_id']=box['source_box_id']
             clean.append(item)
             identities.add(identity)
         if status=='confirmed' and outcome=='boxed' and not clean:raise ValueError('请框选问题，或选择其他复核结果')
         with self.store.lock,self.store.db:
             row=self.store.one('SELECT * FROM annotation_documents WHERE image_id=?',(image_id,))
             if (row['version'] if row else 0)!=version:raise ValueError('补标已被其他页面更新，请重新读取；原结果未覆盖')
+            previous=json.loads(row['data']) if row else None
+            regions=clean_negative_regions(body.get('negative_regions',previous.get('negative_regions',[]) if previous else []))
+            if status=='confirmed':reject_conflicting_regions(clean,regions)
             if proposal_id:
-                previous=json.loads(row['data']) if row else None
                 proposal=self.proposal(image_id,source,include_annotations=True)
                 if not proposal and previous and previous.get('proposal_id')==proposal_id:
                     accepted=self.store.one("SELECT data FROM annotation_proposals WHERE image_id=? AND proposal_id=? AND status='accepted'",(image_id,proposal_id))
@@ -226,7 +318,7 @@ class Annotations:
             if status=='confirmed' and body.get('label_fingerprint')!=label_hash:
                 raise ValueError('人工分类已更新，请重新读取后确认补标')
             document={'source':source,'coordinate_space':'exif_transposed_normalized_xywh',
-                'boxes':clean,'status':status,'outcome':outcome,'label_fingerprint':label_hash,
+                'boxes':clean,'negative_regions':regions,'status':status,'outcome':outcome,'label_fingerprint':label_hash,
                 'review_run':body.get('review_run')}
             if proposal_id:
                 document.update(proposal_id=proposal_id,model_id=proposal['model_id'],method=proposal['method'],
@@ -238,12 +330,114 @@ class Annotations:
             self.store.db.execute('INSERT INTO annotation_history(image_id,version,before_data,after_data,created_at) VALUES(?,?,?,?,?)',
                 (image_id,next_version,row['data'] if row else None,raw,stamp))
             if status=='confirmed':
+                if proposal_id or regions or (outcome=='boxed' and clean):
+                    feedback={'schema_version':1,'kind':'annotation_review','status':'confirmed','source':source,
+                        'coordinate_space':'exif_transposed_normalized_xywh','annotation_version':next_version,
+                        'label_fingerprint':label_hash,'negative_regions':regions,'whole_image_normal':False,
+                        'proposal_id':proposal_id,'events':correction_events(proposal if proposal_id else previous or {},clean,regions)}
+                    if proposal_id:feedback.update(model_id=proposal['model_id'],method=proposal['method'])
+                    self._record_feedback(image_id,feedback,stamp)
                 if proposal_id:
                     self.store.db.execute('UPDATE annotation_proposals SET status=?,reviewed_at=? WHERE image_id=? AND proposal_id=?',
                         ('accepted' if outcome=='boxed' and clean else 'rejected',stamp,image_id,proposal_id))
                 self.store.db.execute("UPDATE error_reviews SET status='reviewed',reviewed_at=? WHERE image_id=? AND run_id=?",
                     (stamp,image_id,body.get('review_run')))
         return {'saved':True,'version':next_version,'document':document,'labels_unchanged':True}
+
+    def _record_feedback(self, image_id, data, stamp):
+        raw=json.dumps(data,ensure_ascii=False,sort_keys=True,separators=(',',':'))
+        identity=fingerprint(str(image_id)+':'+raw)
+        self.store.db.execute('INSERT OR IGNORE INTO annotation_feedback(image_id,identity,data,created_at) VALUES(?,?,?,?)',
+            (image_id,identity,raw,stamp))
+        return self.store.one('SELECT id FROM annotation_feedback WHERE identity=?',(identity,))['id']
+
+    def save_feedback(self, image_id, body):
+        """Append a human region correction without modifying classification or any human frame."""
+        if body.get('status')!='confirmed':raise ValueError('独立纠错必须经人工明确确认')
+        source=self.source(image_id)
+        if body.get('source_sha256')!=source['sha256']:raise ValueError('原图已变化，请重新读取后纠错')
+        regions=clean_negative_regions(body.get('negative_regions'))
+        if not regions:raise ValueError('请指定局部误报区域，不能将整图视为正常')
+        with self.store.lock,self.store.db:
+            row=self.store.one('SELECT * FROM annotation_documents WHERE image_id=?',(image_id,))
+            version=row['version'] if row else 0
+            if 'expected_version' in body and body['expected_version']!=version:
+                raise ValueError('补标已被其他页面更新，请重新读取；原结果未覆盖')
+            document=json.loads(row['data']) if row else None
+            if document:reject_conflicting_regions(document.get('boxes',[]),regions)
+            label=self.store.one('SELECT data FROM labels WHERE image_id=?',(image_id,))
+            label_hash=fingerprint(label['data'] if label else '')
+            if body.get('label_fingerprint')!=label_hash:raise ValueError('人工分类已更新，请重新读取后纠错')
+            feedback={'schema_version':1,'kind':'region_correction','status':'confirmed','source':source,
+                'coordinate_space':'exif_transposed_normalized_xywh','annotation_version_at_confirmation':version,
+                'label_fingerprint':label_hash,'negative_regions':regions,'whole_image_normal':False,
+                'proposal_id':body.get('proposal_id'),'model_id':body.get('model_id'),
+                'events':[{'kind':'false_positive','source_box_id':r.get('source_box_id'),'reason':r['reason']} for r in regions]}
+            identity=self._record_feedback(image_id,feedback,dt.datetime.now(dt.timezone.utc).isoformat())
+        return {'saved':True,'feedback_id':identity,'labels_unchanged':True,'annotations_unchanged':True}
+
+    def feedback_export(self, verify_source=True):
+        rows=self.store.query('SELECT f.*,i.relative_path,i.available,i.size,i.mtime_ns,l.data label_data,d.image_id has_draft,'
+            'a.data annotation_data,a.version annotation_version FROM annotation_feedback f JOIN images i ON i.id=f.image_id '
+            'LEFT JOIN labels l ON l.image_id=i.id LEFT JOIN drafts d ON d.image_id=i.id '
+            'LEFT JOIN annotation_documents a ON a.image_id=i.id WHERE i.root_id=? ORDER BY f.id',
+            (self.store.current_root()['id'],))
+        trained={r['feedback_id'] for r in self.store.query('SELECT DISTINCT feedback_id FROM annotation_feedback_training')}
+        result=[];source_cache={}
+        for row in rows:
+            feedback=json.loads(row['data']);label=json.loads(row['label_data']) if row['label_data'] else None
+            document=json.loads(row['annotation_data']) if row['annotation_data'] else None;reasons=[]
+            if not label or not label.get('defects') or label.get('image_state','') not in ('','defect'):
+                reasons.append('classification_policy_excluded')
+            if row['has_draft']:reasons.append('classification_draft')
+            if feedback['label_fingerprint']!=fingerprint(row['label_data']):reasons.append('classification_changed')
+            if feedback.get('status')!='confirmed':reasons.append('not_human_confirmed')
+            if feedback.get('kind')=='annotation_review' and (not document or document.get('status')!='confirmed'
+                or row['annotation_version']!=feedback.get('annotation_version') or document.get('outcome')=='unclear'):
+                reasons.append('annotation_not_current_confirmed')
+            if document and document.get('status')!='confirmed':reasons.append('annotation_draft')
+            if document and document.get('outcome')=='unclear':reasons.append('unclear_annotation')
+            try:
+                reject_conflicting_regions(document.get('boxes',[]) if document else [],feedback.get('negative_regions',[]))
+            except ValueError:reasons.append('negative_overlaps_current_positive')
+            source=feedback['source'];verified=False
+            if verify_source:
+                if row['image_id'] not in source_cache:
+                    try:source_cache[row['image_id']]=self.source(row['image_id'])
+                    except (ValueError,OSError):source_cache[row['image_id']]=None
+                current=source_cache[row['image_id']]
+                verified=bool(current and all(source[k]==current[k] for k in ('sha256','width','height')))
+                if not verified:reasons.append('source_changed_or_unavailable')
+            elif not row['available'] or row['size']!=source['size'] or row['mtime_ns']!=source['mtime_ns']:
+                reasons.append('source_index_changed_or_unavailable')
+            result.append({'feedback_id':row['id'],'image_id':row['image_id'],'relative_path':row['relative_path'],
+                'created_at':row['created_at'],'source':source,'feedback':feedback,'annotation':document,
+                'original_classification':label,'original_classification_raw':row['label_data'],
+                'training_eligible_by_label_policy':not reasons,'exclusion_reasons':reasons,
+                'source_sha256_verified':verified,'included_in_training':row['id'] in trained})
+        return {'schema_version':1,'coordinate_space':'exif_transposed_normalized_xywh','whole_image_negatives':False,
+            'source_hash_must_be_reverified_before_training':not verify_source,'items':result}
+
+    def feedback_state(self):
+        items=self.feedback_export(verify_source=False)['items'];eligible=[r for r in items if r['training_eligible_by_label_policy']]
+        current_regions={(r['image_id'],g['id']) for r in eligible for g in r['feedback'].get('negative_regions',[])}
+        return {'confirmed_corrections':len(items),'confirmed_regions':len(current_regions),
+            'eligible_feedback':len(eligible),'pending_training_feedback':sum(not r['included_in_training'] for r in eligible),
+            'pending_training_images':len({r['image_id'] for r in eligible if not r['included_in_training']}),
+            'trained_feedback':sum(r['included_in_training'] for r in items),
+            'weight_update_mode':'reviewed_batch_training','automatic_online_weight_updates':False}
+
+    def record_feedback_training(self, run_id, feedback_ids, model_sha256):
+        if not isinstance(run_id,str) or not run_id or len(run_id)>160:raise ValueError('训练批次不正确')
+        if not isinstance(model_sha256,str) or len(model_sha256)!=64 or any(c not in '0123456789abcdef' for c in model_sha256):
+            raise ValueError('模型校验值不正确')
+        if not isinstance(feedback_ids,list) or any(type(v) is not int for v in feedback_ids):raise ValueError('纠错记录不正确')
+        with self.store.lock,self.store.db:
+            for identity in sorted(set(feedback_ids)):
+                if not self.store.one('SELECT id FROM annotation_feedback WHERE id=?',(identity,)):raise ValueError('纠错记录不存在')
+                self.store.db.execute('INSERT OR IGNORE INTO annotation_feedback_training(feedback_id,run_id,model_sha256,created_at) VALUES(?,?,?,?)',
+                    (identity,run_id,model_sha256,dt.datetime.now(dt.timezone.utc).isoformat()))
+        return {'recorded':True,'feedback_count':len(set(feedback_ids)),'production_model_changed':False}
 
     def export(self):
         rows=self.store.query('SELECT a.*,i.relative_path,l.data label_data,d.image_id has_draft FROM annotation_documents a '

@@ -38,3 +38,29 @@ python train_detector.py --dataset ./runs/example/dataset.json --run ./runs/exam
 第一轮测试结果已经被查看，第二轮沿用同一测试划分，因此属于探索性复测，不是新的盲测验收。第二轮轮次与阈值只由验证集选定，第二轮测试后没有继续调参。
 
 4 个测试框不足以代表总体准确率或生产效果。本模型仍为实验候选生成器，不替换现有线上模型，不改变既有分类与人工框，也不把未审核候选纳入训练。后续位置建议由 `generate_detector_proposals.py` 生成，仅匹配图片已确认的问题类型，导入后仍须人工确认。
+
+## 人工纠错与局部正常区域辅助训练
+
+`prepare_detector.py --feedback-json feedback-export.json` 可读取分类工具 `/api/annotation-feedback/export`。程序仍以同一 SQLite 快照的原分类和 NAS 源文件为准，重验问题点、图片状态、分类草稿、原始分类 JSON 指纹、源 SHA 和 EXIF 后尺寸；导出中的布尔标记不代替本地核验。人工确认的正框仍由正常流程进入 `records`。
+
+已确认的工艺孔、正常结构等局部误报单独放在 `negative_feedback_records`，不生成整图正常标签，也不伪造正框。其区域内的非正 anchor 恢复加权负 objectness 监督；未框选的其余区域保持忽略，正 anchor 的损失不被正常区域覆盖。每个辅助样本每轮固定出现 3 次、区域权重 2，水平翻转和 resize 同步作用于图像及区域。与人工正框重叠的正常反馈排除。工艺孔形状本身不作为几何过滤条件，孔边真实崩缺仍可预测。
+
+局部反馈只允许训练组使用；与当前或历史验证/测试存在同订单、同售后、相同 SHA 或保守近重复关系的反馈排除。数据集的 `included_feedback_ids` 仅记录实际参与训练的整数反馈 ID，包括已进入训练组的人工正框纠错。反馈不合格或属于留出组时不会标为已收录。
+
+```powershell
+python prepare_detector.py --run ./runs/new --snapshot ./runs/new/source/labels.sqlite3 --historical ./runs/previous/dataset.json --feedback-json ./feedback-export.json
+python train_detector.py --dataset ./runs/new/dataset.json --run ./runs/new/detector --epochs 50 --seconds 330 --batch-size 2 --input-size 640 --adapt-backbone --defer-test --initialize-from ./runs/previous/detector
+python train_detector.py --dataset ./runs/new/dataset.json --run ./runs/new/detector --compare-validation-to ./runs/previous/detector
+```
+
+`--initialize-from` 按问题名称映射旧类别输出通道，新增类别保留新初始化。比较命令只读同一新验证集，旧模型未知类别仍计额外候选，不因类别重排漏计。输出 `validation-comparison.json` 中 `baseline` / `candidate` 的 TP/FN/FP、F2、召回率，以及 `test_used: false`。自动循环使用 `--defer-test`，不反复查看测试集；验证不退步只是晋级必要条件，小样本验证通过也不能替代独立验收。
+
+### 本轮有限实验结果
+
+本轮 78 张人工确认图片、98 个正框、10 类问题；训练 55 张 / 71 框、验证 12 张 / 13 框、测试 11 张 / 14 框，另有 1 张 / 1 个明确正常局部 ROI。保留上一轮已知留出划分；本轮测试仍属于探索性复用。训练从上一轮位置检测权重迁移，FP32 640 输入，50 轮耗时约 206 秒。只按验证选第 35 轮和 0.3 阈值。
+
+验证集找回 3、漏 10、额外候选 4；同一验证集旧模型各自按预设网格选阈值时找回 3、漏 10、额外候选 58。固定 0.05 对照中旧模型找回 2 / 额外候选 31，新模型找回 3 / 额外候选 11，说明变化来自实际权重训练。
+
+但最终测试找回 **0 / 14**、额外候选 4，不满足使用要求。为定位原因，额外做了预先指定的固定 0.05 诊断，仍找回 0 / 14，因此并非单纯阈值过高。旧模型在同一新测试集按原 0.05 找回 2 / 14、额外候选 42；其当前验证选定的 0.01 找回 3 / 14、额外候选 68。上述诊断没有改变所选轮次或阈值，也没有继续调参训练。本轮新模型不应晋级为主候选模型。
+
+已纠正的局部 ROI 上最大问题分数从约 0.395 降至 0.00000262，这是训练区域拟合检查，不能宣称已经识别所有正常孔。问题类别和位置在留出图上的泛化仍弱，继续依赖人工审核；已有分类、人工框和线上分类模型不受训练修改。

@@ -1,6 +1,6 @@
 {
   "training": {
-    "source_commit": "fed37d17f6e4ed0ac1b6ef1cf86f85a34197ce9d",
+    "source_commit": "dd6296e14104f5f2bbe4adca52b9cd9723f68790",
     "files": [
       {
         "path": ".gitignore",
@@ -12,11 +12,15 @@
       },
       {
         "path": "DETECTOR_TRAINING.md",
-        "sha256": "0f1b87749d4cd9e521746a172f36d59b9dad280859fe577e8119d365db9c1bce"
+        "sha256": "453aed00c60858aff9227655528a0a6ee868c9aaff66a1c651b204d4c1452a76"
       },
       {
         "path": "README.md",
         "sha256": "b12cdd5ed053c4285ddcf64b93aedb1b72c2133149d32f4b4548289d82bdb0fe"
+      },
+      {
+        "path": "correction_cycle.py",
+        "sha256": "27e3338963d3a43834e3fc04e5888d781ab65ca174d0f143fb5f0370608076d9"
       },
       {
         "path": "export_recommendations.py",
@@ -32,7 +36,7 @@
       },
       {
         "path": "generate_detector_proposals.py",
-        "sha256": "ac68fad9c8760816d1cb14014538faf4ec6cacf0fff9e7478e42b3ce9c63f318"
+        "sha256": "ee81e8a90be84f0d9dbc73dd0948339ebf10f915ecb715fff03d70474aa9ef38"
       },
       {
         "path": "improve_classifier.py",
@@ -40,7 +44,7 @@
       },
       {
         "path": "prepare_detector.py",
-        "sha256": "9bb830338c17c0ffd5c22b162a84ff2841b1e49072f337f7124bd818694cd5a6"
+        "sha256": "87b9fbd606c61f1e7fb052497e1587f6fe94e69da858ac5a9143e7e07616567d"
       },
       {
         "path": "recall_classifier.py",
@@ -51,6 +55,10 @@
         "sha256": "b86a55589f07d424951f0d2cba9b6e27b0ae9189cfe81a90b91191f46a7f9c0f"
       },
       {
+        "path": "roi_feedback.py",
+        "sha256": "a4c50255de8429783c0f2c189a0f353b168490a6f049ee733e37cfd827f787fe"
+      },
+      {
         "path": "test_box_proposals.py",
         "sha256": "428122f63953374767d2152852e0ec3fb235df7f293dfff4f6b594104b51d61c"
       },
@@ -59,8 +67,12 @@
         "sha256": "1e5ce23e79e0b143f7fbc778889a612a794df4ff0e520c187a93253b4ff2ca0b"
       },
       {
+        "path": "test_correction_cycle.py",
+        "sha256": "2386fd745865ae17dfeb73e1d503b0e122e4dec6b62848b74ad13cacecb50b7b"
+      },
+      {
         "path": "test_detector_proposals.py",
-        "sha256": "d857095815696f968542aea4547ecf54fdb73dc17de03638a229085fb9780477"
+        "sha256": "fc6c7473bb3741103e02f9bcda34bf708a522890a9abd0bb3ba698b7cd27af6d"
       },
       {
         "path": "test_improve_classifier.py",
@@ -75,8 +87,12 @@
         "sha256": "e9c903167720f40c304b397758b3af673e46f883405e74fc612bafb1c712594c"
       },
       {
+        "path": "test_roi_feedback.py",
+        "sha256": "922999aef4194de21597e78690cd8fee7dcc8ab28740078475f7d0e715b36a0e"
+      },
+      {
         "path": "test_train_detector.py",
-        "sha256": "b4a731d7d385cca5acd5d2b7e5a018e3da150c1f5fa7f3462899dd42d9ff0428"
+        "sha256": "83e7f81b477fcfa5c0a80fb4040d1897ebd0696a30c44446d5088417b708aa2a"
       },
       {
         "path": "test_unrelated_filter.py",
@@ -84,7 +100,7 @@
       },
       {
         "path": "train_detector.py",
-        "sha256": "e692a238b3a09ca776bad8fe06cec32719e07e5fa4a4374edbd3854c2ae78afc"
+        "sha256": "66cf6561bf9f1201491a5361d571b202790388d49e321f9977c892a44d36782c"
       },
       {
         "path": "unrelated_filter.py",
@@ -97,7 +113,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "77fd85711725324aaa68a65f2a1f78f375ae0894",
+    "source_commit": "a48a86747177bfeba8cf479a7cf25757a51ce6ea",
     "files": [
       {
         "path": ".gitignore",
@@ -117,11 +133,11 @@
       },
       {
         "path": "annotations.py",
-        "sha256": "e7d5dd5fbb449853745eacc70b80ac4cfe03dbc5e92a4fffb515c10e7af4f697"
+        "sha256": "b08ffa72950e01c63543fa7f7b09e84944e4e86e987505e10f9f58bb7bc247d3"
       },
       {
         "path": "app.py",
-        "sha256": "c4818c9147f5a01f0cb5ccf43dece795971a9f63b8f33944d8a09b06e8739d9c"
+        "sha256": "a942f120e020b15755f7bb23d6e094dd7fe91b8584f926f4df2e09e29a91dc84"
       },
       {
         "path": "deployment/enable_recommendations_101.py",
@@ -136,12 +152,20 @@
         "sha256": "a04ba70b8862feaff06f16acc7fce116befd5fb043ef8cc84603906099be20dd"
       },
       {
+        "path": "deployment/import_annotation_feedback.py",
+        "sha256": "b6819984c9fed0d9e2b5b84ea265d1bf520abf24b1968be1616308954d593c95"
+      },
+      {
         "path": "deployment/import_box_proposals.py",
         "sha256": "0c9d08ebdea99cdc8d4824d12a755e81878d8086ef8e685b274d5d88f1cca391"
       },
       {
         "path": "deployment/import_error_review.py",
         "sha256": "9d81ff00f9aac9cc9603a746fb8c121a5e15b3f4b3f9128c38550b463cf9f844"
+      },
+      {
+        "path": "deployment/record_feedback_training.py",
+        "sha256": "a5716ebd051fac5e91ec071af1fd82070cb636ece5844a61784db87f0a2b6a8b"
       },
       {
         "path": "deployment/recover_error_reviews.py",
@@ -201,11 +225,11 @@
       },
       {
         "path": "test_annotation_ui.cjs",
-        "sha256": "d1bb993c8df1c9e4263a25924bc5fc16c4a8365ce3fb1af0279ec008ddd1ab11"
+        "sha256": "cb9c89c613e2cafa8070ebc8a26a71ef5568f63a25701f05058994baf81e4618"
       },
       {
         "path": "test_annotations.py",
-        "sha256": "f957237c09db9d71553183d61f7121eb5e3fe30d3a2ff214f5f3d403240bf3c5"
+        "sha256": "438a07d361af9f2f912d537dfb6ab3bda82053bd5273fe620ec4f2e77267cc8d"
       },
       {
         "path": "test_app.py",
@@ -213,7 +237,7 @@
       },
       {
         "path": "test_box_proposals.py",
-        "sha256": "0a5feaa732ee6e0a2df708eb5775e6ad8d3f57d6a21d4fa21120be9b2904a005"
+        "sha256": "9120f7ade33f367076ceadb652ace5be8a7d2b36816d513d6a7e13af3807366b"
       },
       {
         "path": "test_recommendations.py",
@@ -225,7 +249,7 @@
       },
       {
         "path": "web/annotations.js",
-        "sha256": "d50f5ce07a65ef6b9ad5abb08d3f05ad0bc05f4ed82c1427c785d6de77dab865"
+        "sha256": "a8b697539d21b6ab2b7f7564976cdea214f43b7d65bfe6489feb15e9bdca5694"
       },
       {
         "path": "web/app.js",
@@ -233,11 +257,11 @@
       },
       {
         "path": "web/index.html",
-        "sha256": "f52cd2b6db54f7aaab3ccaba56cbfc1faefde30a1c62b8263f4fd2b3bc4d6d76"
+        "sha256": "31859e516b712c1d1f514992fd25a5f45c535f87adc81209cde5e4a16bdc1365"
       },
       {
         "path": "web/style.css",
-        "sha256": "8e558d3fc237bf6e8f3c9ee0f001d9e5da6f4dd325f6cb42f82297f61988bd59"
+        "sha256": "5a8caff950d7142d8aa040edcb04468dbe62d0c3c114d884265e0f3ae510a7d8"
       },
       {
         "path": "启动分类工具.cmd",

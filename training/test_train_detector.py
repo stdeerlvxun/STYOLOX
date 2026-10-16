@@ -27,6 +27,13 @@ class DetectorMetricsTests(unittest.TestCase):
     def test_small_overlap_is_not_a_hit(self):
         self.assertEqual(match_boxes([self.box()], [self.box(coordinates=[5, 5, 15, 15])])['tp'], 0)
 
+    def test_unknown_prediction_class_still_counts_as_false_positive(self):
+        records = [{'image_id': 1, 'relative_path': 'x', 'group': 'a', 'boxes': [self.box()]}]
+        report, _ = evaluate_predictions(records, {'1': [self.box(kind=-1)]}, [{'id': 0, 'name': 'known'}], .1)
+        self.assertEqual(report['class_and_location']['fp'], 1)
+        self.assertEqual(report['class_and_location']['fn'], 1)
+        self.assertEqual(report['unknown_class_false_positives'], 1)
+
     def test_partial_images_mask_only_negative_objectness_anchors(self):
         targets = torch.tensor([[0.], [1.], [0.], [1.]])
         result = partial_objectness_loss(torch.ones_like(targets), targets, [True, False])

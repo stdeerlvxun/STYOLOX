@@ -21,6 +21,8 @@ import numpy as np
 from PIL import Image, ImageOps
 import torch
 
+from roi_feedback import anchor_centers, region_objectness_loss, transform_rois
+
 YOLOX_SOURCE = Path(r'D:\视觉检测工作区\runtime\YOLOX-6ddff4824372')
 COCO_WEIGHTS = Path(r'D:\视觉检测工作区\models\YOLOX-s\yolox_s.pth')
 THRESHOLDS = [.01, .025, .05, .1, .2, .3]
@@ -123,7 +125,10 @@ def evaluate_predictions(records, predictions, categories, threshold):
         for index in result['missed_indices']:
             per_class[record['boxes'][index]['class_id']]['fn'] += 1
         for index in result['false_positive_indices']:
-            per_class[selected[index]['class_id']]['fp'] += 1
+            if selected[index]['class_id'] in per_class:
+                per_class[selected[index]['class_id']]['fp'] += 1
+            else:
+                totals['unknown_class_fp'] += 1
         detailed.append({'image_id': record['image_id'], 'relative_path': record['relative_path'],
                          'group': record['group'], 'truth': record['boxes'],
                          'predictions': selected, 'class_and_location': result,
@@ -132,6 +137,7 @@ def evaluate_predictions(records, predictions, categories, threshold):
             'location_only': rates(localization['tp'], localization['fn'], localization['fp']),
             'per_class': {c['name']: rates(per_class[c['id']]['tp'], per_class[c['id']]['fn'],
                                            per_class[c['id']]['fp']) for c in categories},
+            'unknown_class_false_positives': totals['unknown_class_fp'],
             'images': len(records), 'threshold': threshold}, detailed
 
 
@@ -225,8 +231,43 @@ def adaptable_parameter(name):
         ('backbone.backbone.dark4.', 'backbone.backbone.dark5.'))
 
 
+def transferred_state(target_state, checkpoint, categories):
+    """Transfer architecture tensors and issue output channels by name, never class index."""
+    source = checkpoint['model']
+    result = {key: value for key, value in source.items() if key in target_state and
+              value.shape == target_state[key].shape and '.cls_preds.' not in key}
+    previous = {c['name']: int(c['id']) for c in checkpoint['categories']}
+    for key, target in target_state.items():
+        if '.cls_preds.' not in key or key not in source:
+            continue
+        value = target.clone()
+        for category in categories:
+            if category['name'] in previous:
+                value[int(category['id'])] = source[key][previous[category['name']]]
+        result[key] = value
+    return result
+
+
+def feedback_sample(record, rgb, input_size, max_labels):
+    """Same resize/flip for the source, positive boxes and human normal regions."""
+    from yolox.data.data_augment import preproc, augment_hsv
+    bgr = np.ascontiguousarray(rgb[..., ::-1])
+    height, width = bgr.shape[:2]
+    flipped = random.random() < .5
+    if flipped:
+        bgr = np.ascontiguousarray(bgr[:, ::-1])
+    if random.random() < .5:
+        augment_hsv(bgr)
+    image, ratio = preproc(bgr, (input_size, input_size))
+    target = np.zeros((max_labels, 5), dtype=np.float32)
+    for i, box in enumerate(record['boxes']):
+        x1, y1, x2, y2 = transform_rois([box['xyxy']], width, ratio, flipped)[0]
+        target[i] = [box['class_id'], (x1+x2)/2, (y1+y2)/2, x2-x1, y2-y1]
+    return image, target, transform_rois(record['negative_rois'], width, ratio, flipped)
+
+
 def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_size=512,
-          adapt_backbone=False, defer_test=False):
+          adapt_backbone=False, defer_test=False, initialize_from=None):
     started = time.monotonic()
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -252,6 +293,11 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
     dataset = json.loads(Path(dataset_path).read_text(encoding='utf-8-sig'))
     categories = dataset['categories']
     records = dataset['records']
+    feedback_records = dataset.get('negative_feedback_records', [])
+    config['human_normal_roi_feedback'] = {'images': len(feedback_records),
+        'regions': sum(len(r['negative_rois']) for r in feedback_records), 'weight': 2.,
+        'repeats_per_epoch': 3, 'scope': 'normal ROI negative objectness only; all other unboxed anchors ignored',
+        'whole_image_normal': False, 'positive_truth_changed': False}
     splits = {split: [r for r in records if r['split'] == split] for split in ('train', 'val', 'test')}
     if not splits['val'] and any(r['split'] == 'validation' for r in records):
         splits['val'] = [r for r in records if r['split'] == 'validation']
@@ -265,6 +311,11 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
             raise ValueError('Training exclusion policy violation')
         if not record['boxes']:
             raise ValueError('Only confirmed human boxed images may enter this experiment')
+    for record in feedback_records:
+        if not record.get('feedback_only') or record.get('split') != 'train' or not record.get('negative_rois'):
+            raise ValueError('Normal ROI feedback must be explicitly sourced train-only auxiliary supervision')
+        if record.get('has_draft') or record.get('image_state') not in (None, '', 'defect') or not record.get('defects'):
+            raise ValueError('Normal ROI feedback image violates unchanged classification exclusions')
     torch.set_num_threads(2)
     random.seed(config['seed'])
     np.random.seed(config['seed'])
@@ -277,7 +328,7 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
     if device != 'cuda':
         raise RuntimeError('This bounded training experiment requires the configured CUDA GPU')
     cache = {}
-    for record in records:
+    for record in records + feedback_records:
         raw = Path(record['full_path']).read_bytes()
         if hashlib.sha256(raw).hexdigest() != record['sha256']:
             raise ValueError(f"Source hash changed: {record['image_id']}")
@@ -287,10 +338,18 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
             raise ValueError('EXIF-transposed source dimensions differ from annotations')
         cache[record['image_id']] = rgb
     model = make_model(len(categories), config)
-    state = torch.load(COCO_WEIGHTS, map_location='cpu', weights_only=False)
-    state = state.get('model', state)
-    matching = {key: value for key, value in state.items() if key in model.state_dict() and
-                value.shape == model.state_dict()[key].shape and '.cls_preds.' not in key}
+    if initialize_from:
+        checkpoint_path = Path(initialize_from)/'detector.pt'
+        checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        matching = transferred_state(model.state_dict(), checkpoint, categories)
+        config['initialize_from'] = str(checkpoint_path)
+        config['initialize_from_sha256'] = sha256(checkpoint_path)
+        config['category_transfer'] = 'class output channels copied by issue name'
+    else:
+        state = torch.load(COCO_WEIGHTS, map_location='cpu', weights_only=False)
+        state = state.get('model', state)
+        matching = {key: value for key, value in state.items() if key in model.state_dict() and
+                    value.shape == model.state_dict()[key].shape and '.cls_preds.' not in key}
     missing, unexpected = model.load_state_dict(matching, strict=False)
     config['loaded_parameters'] = len(matching)
     config['new_parameters'] = list(missing)
@@ -310,11 +369,14 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
     optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
                                  lr=config['learning_rate'], weight_decay=config['weight_decay'])
     partial_batch = []
+    roi_batch = []
+    centers = anchor_centers(input_size, device)
     def mask_partial_negatives(module, inputs, output):
-        return partial_objectness_loss(output, inputs[1], partial_batch)
+        return region_objectness_loss(output, inputs[1], partial_batch, roi_batch, centers, weight=2.)
     objectness_hook = model.head.bcewithlog_loss.register_forward_hook(mask_partial_negatives)
     transform = TrainTransform(max_labels=max(20, max(len(r['boxes']) for r in records)),
                                flip_prob=.5, hsv_prob=.5)
+    write_json(run_dir/'planned-config.json', config)
     detector = Detector(model, categories, input_size, device, nms=config['nms'], max_predictions=10)
     best_key = None
     best_state = None
@@ -333,17 +395,23 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
         else:
             model.backbone.eval()
         model.head.use_l1 = epoch >= 20
-        order = list(splits['train'])
+        order = list(splits['train']) + feedback_records*3
         random.shuffle(order)
         losses = []
         for offset in range(0, len(order), batch_size):
             inputs, targets = [], []
             partial_batch[:] = [bool(record.get('classification_problems_without_boxes'))
                                 for record in order[offset:offset+batch_size]]
+            roi_batch[:] = []
             for record in order[offset:offset+batch_size]:
-                bgr = np.ascontiguousarray(cache[record['image_id']][..., ::-1])
-                labels = np.array([b['xyxy'] + [b['class_id']] for b in record['boxes']], dtype=np.float32)
-                image, target = transform(bgr, labels, (input_size, input_size))
+                if record.get('negative_rois'):
+                    image, target, rois = feedback_sample(record, cache[record['image_id']], input_size, transform.max_labels)
+                else:
+                    bgr = np.ascontiguousarray(cache[record['image_id']][..., ::-1])
+                    labels = np.array([b['xyxy'] + [b['class_id']] for b in record['boxes']], dtype=np.float32)
+                    image, target = transform(bgr, labels, (input_size, input_size))
+                    rois = []
+                roi_batch.append(rois)
                 inputs.append(image)
                 targets.append(target)
             x = torch.from_numpy(np.stack(inputs)).to(device)
@@ -400,12 +468,12 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
         model.eval()
         predictions = predict_records(detector, splits['test'], cache)
         baseline, details = evaluate_predictions(splits['test'], predictions, categories, detector.threshold)
-        write_json(run_dir/'baseline-test-predictions.json', {'description': 'COCO initialization with fresh untrained issue class outputs',
+        write_json(run_dir/'baseline-test-predictions.json', {'description': 'Previous detector initialization' if initialize_from else 'COCO initialization with fresh untrained issue class outputs',
                                                            'threshold': detector.threshold, 'evaluated_images': details})
         model.load_state_dict(best_state)
     support = {split: dict(Counter(b['problem'] for r in rows for b in r['boxes']))
                for split, rows in splits.items()}
-    metrics = {'experiment': 'first human-confirmed YOLOX-s bounding-box detector',
+    metrics = {'experiment': 'human-confirmed YOLOX-s detector with explicit local normal ROI corrections' if feedback_records else 'first human-confirmed YOLOX-s bounding-box detector',
                'exploratory_small_holdout': True, 'image_counts': {s: len(v) for s, v in splits.items()},
                'group_counts': {s: len(v) for s, v in groups.items()}, 'class_support': support,
                'selected_epoch': best_selection['epoch'], 'selected_threshold': detector.threshold,
@@ -416,12 +484,14 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
                'model_sha256': sha256(run_dir/'detector.pt'), 'validation': reports['val'],
                'test': reports.get('test'), 'test_evaluation_pending': defer_test,
                'untrained_issue_head_baseline_test': baseline,
+               'initialization_baseline_test': baseline,
+               'human_normal_roi_feedback': config['human_normal_roi_feedback'],
                'limitations': ['Small order-grouped test set: exploratory only',
-                              'No negative or unclear images enter training',
+                              'No image-state negatives or unclear images enter training; explicit local normal ROI feedback is auxiliary and never an entire-image label',
                               'False positives are relative to reviewed boxes; unmarked real issues may exist',
                               'Unsupported or absent test classes have no measured recall',
                               'Location-only metric ignores issue type and is not issue recognition accuracy',
-                              'Baseline is a fresh issue head, not the deployed image classifier'],
+                              'Initialization baseline is a prior detector or fresh issue head, not the deployed image classifier'],
                'online_model_replaced': False, 'human_classifications_modified': False}
     write_json(run_dir/'metrics.json', metrics)
     print(json.dumps({'finished': True, **metrics}, ensure_ascii=False), flush=True)
@@ -462,6 +532,80 @@ def finalize_test(dataset_path, run_dir):
     return report
 
 
+def compare_validation(dataset_path, run_dir, base_run):
+    """Compare on the same current validation truth by class name; never touch test."""
+    dataset = json.loads(Path(dataset_path).read_text(encoding='utf-8-sig'))
+    records = [r for r in dataset['records'] if r['split'] in ('val', 'validation')]
+    categories = dataset['categories']
+    names = {c['name']: int(c['id']) for c in categories}
+    reports = {}
+    for name, directory in [('base', base_run), ('candidate', run_dir)]:
+        detector = load_detector(directory)
+        predictions = {}
+        for record in records:
+            if sha256(record['full_path']) != record['sha256']:
+                raise ValueError('Validation source changed during comparison')
+            values = detector.predict_image(record['full_path'], min(THRESHOLDS))
+            predictions[str(record['image_id'])] = [dict(v, class_id=names.get(v['problem'], -1))
+                                                     for v in values]
+        selected, candidates = select_threshold(records, predictions, categories)
+        report, _ = evaluate_predictions(records, predictions, categories, selected['threshold'])
+        reports[name] = {'model_sha256': sha256(Path(directory)/'detector.pt'),
+                         'selection': selected, 'threshold_candidates': candidates, **report}
+        detector.model.cpu()
+        del detector
+        torch.cuda.empty_cache()
+    base, candidate = [reports[name]['class_and_location'] for name in ('base', 'candidate')]
+    non_regression = candidate['recall'] >= base['recall'] and candidate['f2'] >= base['f2'] and candidate['fp'] <= base['fp']
+    strict_improvement = candidate['recall'] > base['recall'] or candidate['f2'] > base['f2'] or candidate['fp'] < base['fp']
+    result = {'validation_only': True, 'test_used': False, 'dataset_sha256': sha256(dataset_path),
+              'class_mapping': 'issue name', 'base': reports['base'], 'candidate': reports['candidate'],
+              'baseline': {**reports['base'], **base},
+              'same_validation_images': True, 'problem_name_mapping': True,
+              'promotion_recommended': non_regression and strict_improvement,
+              'gate': 'candidate recall and F2 not lower, FP not higher, and at least one strict improvement',
+              'exploratory_small_holdout': True}
+    result['candidate'].update(candidate)
+    write_json(Path(run_dir)/'validation-comparison.json', result)
+    return result
+
+
+def region_fit_diagnostic(dataset_path, run_dir, base_run):
+    """Training-fit check on reviewed local regions, not held-out generalization accuracy."""
+    from yolox.data.data_augment import ValTransform
+    dataset = json.loads(Path(dataset_path).read_text(encoding='utf-8-sig'))
+    rows = dataset.get('negative_feedback_records', [])
+    reports = []
+    for record in rows:
+        item = {'image_id': record['image_id'], 'regions_xyxy': record['negative_rois']}
+        for name, directory in [('before', base_run), ('after', run_dir)]:
+            detector = load_detector(directory)
+            rgb = read_rgb(record['full_path'])
+            bgr = np.ascontiguousarray(rgb[..., ::-1])
+            array, _ = ValTransform()(bgr, None, (detector.input_size, detector.input_size))
+            with torch.inference_mode():
+                output = detector.model(torch.from_numpy(array).unsqueeze(0).to(detector.device))[0]
+            centers = anchor_centers(detector.input_size, detector.device)
+            ratio = min(detector.input_size/record['width'], detector.input_size/record['height'])
+            values = []
+            for region in transform_rois(record['negative_rois'], record['width'], ratio):
+                x1, y1, x2, y2 = region
+                mask = (centers[:, 0] >= x1) & (centers[:, 0] < x2) & (centers[:, 1] >= y1) & (centers[:, 1] < y2)
+                scores = output[mask, 4:5]*output[mask, 5:]
+                values.append({'anchor_count': int(mask.sum()),
+                    'max_issue_score': float(scores.max()) if scores.numel() else None,
+                    'max_objectness': float(output[mask, 4].max()) if mask.any() else None})
+            item[name] = values
+            detector.model.cpu()
+            del detector
+            torch.cuda.empty_cache()
+        reports.append(item)
+    result = {'scope': 'reviewed training-region fit only, not unseen-hole accuracy',
+              'whole_image_normal': False, 'records': reports}
+    write_json(Path(run_dir)/'normal-region-fit.json', result)
+    return result
+
+
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--dataset', required=True)
@@ -473,9 +617,21 @@ if __name__ == '__main__':
     parser.add_argument('--adapt-backbone', action='store_true')
     parser.add_argument('--defer-test', action='store_true')
     parser.add_argument('--evaluate-test-only', action='store_true')
+    parser.add_argument('--initialize-from', type=Path)
+    parser.add_argument('--compare-base', type=Path, help='Validation-only comparison after training or with --compare-only')
+    parser.add_argument('--compare-only', action='store_true')
+    parser.add_argument('--compare-validation-to', type=Path,
+                        help='Run only same-dataset validation comparison to this baseline; no training or test')
     args = parser.parse_args()
-    if args.evaluate_test_only:
+    if args.compare_only or args.compare_validation_to:
+        base_run = args.compare_validation_to or args.compare_base
+        if not base_run:
+            parser.error('--compare-only requires --compare-base')
+        print(json.dumps(compare_validation(args.dataset, args.run, base_run), ensure_ascii=False), flush=True)
+    elif args.evaluate_test_only:
         finalize_test(args.dataset, args.run)
     else:
         train(args.dataset, args.run, args.epochs, args.seconds, args.batch_size, args.input_size,
-              args.adapt_backbone, args.defer_test)
+              args.adapt_backbone, args.defer_test, args.initialize_from)
+        if args.compare_base:
+            print(json.dumps(compare_validation(args.dataset, args.run, args.compare_base), ensure_ascii=False), flush=True)
