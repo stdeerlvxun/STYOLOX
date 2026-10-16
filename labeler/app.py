@@ -243,6 +243,7 @@ class Store:
             "defects": [], "responsibilities": ["待核"], "image_state": "", "note": "",
             "problem_responsibilities": {}}
         record["has_draft"] = bool(draft)
+        record["draft_fingerprint"] = hashlib.sha256(draft["data"].encode()).hexdigest() if draft else None
         record["classified"] = bool(committed)
         record['has_annotations']=bool(self.one('SELECT image_id FROM annotation_documents WHERE image_id=?',(image_id,)))
         record['error_review']=self.annotations.review(image_id)

@@ -1,6 +1,6 @@
 {
   "training": {
-    "source_commit": "ea52b2d6a544bb3321b0e4a655bc99c6375df623",
+    "source_commit": "efdef020c89cec4155345ae574db3290735fcbbd",
     "files": [
       {
         "path": ".gitignore",
@@ -20,7 +20,7 @@
       },
       {
         "path": "correction_cycle.py",
-        "sha256": "9ce10bba021a609c9c2cc166f950a117c15d527730894dd0f696c356d8d0111f"
+        "sha256": "df4a76d4608d93c8e5fc28f05412906a41b0bb4b79b2dd172a8c587c1f8c5b6c"
       },
       {
         "path": "export_recommendations.py",
@@ -68,7 +68,7 @@
       },
       {
         "path": "test_correction_cycle.py",
-        "sha256": "dfc226c0c98f8c4f66964c768b313047d95d7c0d541fa66f7eaed420764aebc6"
+        "sha256": "0581e9e7221393e2c83ac59759ad144d39b6723490661b946ca708e03169ea12"
       },
       {
         "path": "test_detector_proposals.py",
@@ -113,7 +113,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "5e7800204879ccc55c665c1ce68df0af58520adc",
+    "source_commit": "249a73db0aeb57d665d4631de7d48b30fcb9ecda",
     "files": [
       {
         "path": ".gitignore",
@@ -121,23 +121,23 @@
       },
       {
         "path": "DESIGN.md",
-        "sha256": "7c3b06de2c41f1432a27f4590b65e66ac5604e367b26b4d788bf47942e1eca9a"
+        "sha256": "b9e9afec2ef475d4643d5294b61f005f0b8de29c02dce72beb9f8e03418f2e38"
       },
       {
         "path": "PRODUCT.md",
-        "sha256": "d6fffc8326ebfb45cf513bb1be861d98e85fac1641324da92c9c67bd9d727462"
+        "sha256": "dc0b3edb033a340f12b794c844950311010e36eb4c22b4846b1e02e54e3678eb"
       },
       {
         "path": "README.md",
-        "sha256": "051d8fce64ff7b626fde5df81d69e9d2732f582f9e9e9704b8a811ff0eebd4d0"
+        "sha256": "fb1ce4f6a99794876d18c2192cf7337d3f1a788c663a7c1cbeea82eaa6bae280"
       },
       {
         "path": "annotations.py",
-        "sha256": "b08ffa72950e01c63543fa7f7b09e84944e4e86e987505e10f9f58bb7bc247d3"
+        "sha256": "2d3b34512e88990c9d0161c7c7f3436c9eaff607d87e4fe22aa52d76779320c7"
       },
       {
         "path": "app.py",
-        "sha256": "a942f120e020b15755f7bb23d6e094dd7fe91b8584f926f4df2e09e29a91dc84"
+        "sha256": "b0b6627ebce3d51d9ce63c2f179bbf1e3af01101024228bb7858cbc6c1995482"
       },
       {
         "path": "deployment/enable_recommendations_101.py",
@@ -225,15 +225,19 @@
       },
       {
         "path": "test_annotation_ui.cjs",
-        "sha256": "cb9c89c613e2cafa8070ebc8a26a71ef5568f63a25701f05058994baf81e4618"
+        "sha256": "5ab2ac627db084916bdfd407ad830b0b5548a6f1f30667637c87ca17de13046c"
       },
       {
         "path": "test_annotations.py",
-        "sha256": "438a07d361af9f2f912d537dfb6ab3bda82053bd5273fe620ec4f2e77267cc8d"
+        "sha256": "ec7cc7627d976f16f17d761227f792e07b801da584d821e4d525616b788fbd39"
       },
       {
         "path": "test_app.py",
         "sha256": "b89c03dd503b65e8b82898c0efa6c0d7bcff96d42a151844a158d0aab60f9ebc"
+      },
+      {
+        "path": "test_box_flow_ui.cjs",
+        "sha256": "d5df54267bebf08894c827599ee8a30b25cb165fb2787b922a602752a99df915"
       },
       {
         "path": "test_box_proposals.py",
@@ -253,19 +257,19 @@
       },
       {
         "path": "web/annotations.js",
-        "sha256": "a8b697539d21b6ab2b7f7564976cdea214f43b7d65bfe6489feb15e9bdca5694"
+        "sha256": "c881c593b13240f7d4ec03fe9bcc5ce90106594e59654dbf9547607353c8689a"
       },
       {
         "path": "web/app.js",
-        "sha256": "e51157dcd184a2b802242dc4725924b8d7bd4046f90fb7311ab801c93b7a71ae"
+        "sha256": "f39af37c5c0aa331aeff6bc265d1b4c6f3e652f4434b2b1c381eb4e74ca8a2a3"
       },
       {
         "path": "web/index.html",
-        "sha256": "953887adf8a027b44e25c5ce25d5d771406e8cd217bd4b1eaec5aad825deea64"
+        "sha256": "c67ed762b9f031cb47764664ffae3d227e7024f1997ddcedc498acfebba9e931"
       },
       {
         "path": "web/style.css",
-        "sha256": "3a6025e1cd805bc4f917674bd9079166317fe37580a0f6b6cf309111217d3f50"
+        "sha256": "a2ffe28164185d4f08b6dddeb6bf44e537d8c6bf050202463887c90495b0b379"
       },
       {
         "path": "启动分类工具.cmd",

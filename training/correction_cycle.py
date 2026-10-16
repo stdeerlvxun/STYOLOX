@@ -236,9 +236,18 @@ class ExclusiveLock:
 
 
 def run_process(arguments, *, timeout, cwd=None, log=None):
+    # A GUI/pythonw parent does not stop console executables (Python, ssh,
+    # scp, nvidia-smi) from creating their own terminal on Windows.
+    window_options = {}
+    if os.name=='nt':
+        startup = subprocess.STARTUPINFO()
+        startup.dwFlags |= subprocess.STARTF_USESHOWWINDOW
+        startup.wShowWindow = subprocess.SW_HIDE
+        window_options = {'creationflags':subprocess.CREATE_NO_WINDOW, 'startupinfo':startup}
     result = subprocess.run([str(v) for v in arguments], cwd=cwd, timeout=timeout,
                             encoding='utf-8', errors='replace', capture_output=True,
-                            env={**os.environ, 'PYTHONIOENCODING':'utf-8'}, shell=False)
+                            env={**os.environ, 'PYTHONIOENCODING':'utf-8'}, shell=False,
+                            **window_options)
     if log:
         Path(log).write_text(result.stdout+'\n'+result.stderr, encoding='utf-8')
     if result.returncode:

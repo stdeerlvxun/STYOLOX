@@ -20,10 +20,11 @@ class Element{
   const context=vm.createContext({structuredClone,Promise,setTimeout(){return 1;},clearTimeout(){},
     document:{getElementById:el,createElement:()=>new Element(),createElementNS:()=>new Element(),addEventListener(type,handler){if(type==='keydown')keys.push(handler);},body:new Element()},
     S:{current:{id:7,label:structuredClone(label)},tags:{defect:['崩边','划伤']},busy:false,navigating:false,zoom:1,rotation:0,panX:0,panY:0,index:0},
-    clientId:()=>'new-box-'+(++clientIds),fail:e=>failures.push(e),toast(){},renderTags(){},
+    clientId:()=>'new-box-'+(++clientIds),fail:e=>failures.push(e),toast(){},renderTags(){},params:args=>new URLSearchParams(args).toString(),
     async refreshState(){},async reload(){navigations++;},
     async api(path,body){
       if(path==='/api/annotation-feedback/state')return {confirmed_corrections:6};
+      if(path.startsWith('/api/images?'))return {items:[{id:8}],total:10};
       if(!body)return {source:{sha256:'source',width:1600,height:900},document:{boxes:structuredClone(documentBoxes),negative_regions:structuredClone(documentNegatives),outcome:documentOutcome,status:documentStatus,proposal_id:documentProposalId},version,proposal:structuredClone(proposal),
         label_fingerprint:'human-label',review:{run_id:'frozen-review',kinds:['problem_miss'],missing_problems:['崩边']}};
       if(path==='/api/annotation-proposals/reject'){rejections.push(structuredClone(body));return {status:'rejected'};}

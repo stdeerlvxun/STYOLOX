@@ -59,19 +59,26 @@
       <section id="annotationBar" class="annotation-bar" hidden aria-label="问题位置补标">
         <p id="errorReviewSummary" class="small" role="status">原分类保留，位置补标单独保存。</p>
         <div id="autoBoxProposal" class="annotation-proposal" hidden><p id="autoBoxSummary" class="small" role="status"></p><div class="annotation-controls"><button id="processHoleBox" title="选中机器框后，标记该处是正常工艺孔；不改变整图分类">工艺孔 · 非破损</button><button id="normalStructureBox" title="选中机器框后，标记该处是正常结构；不改变整图分类">正常结构 · 非破损</button><button id="rejectAutoBoxes" class="text-button">全部机器框误报</button><button id="adoptAutoBoxes" hidden>保留全部建议</button><span id="annotationFeedbackStatus" class="small muted" role="status">纠错在确认后纳入后续批次训练</span></div></div>
-        <div class="annotation-controls"><select id="boxProblem" aria-label="新框或改框的问题类型"></select><button id="drawBox" aria-pressed="false">开始框选</button><select id="boxSelect" aria-label="选择已有问题框"></select><button id="relabelBox">修改框类型</button><button id="deleteBox">删除选中框</button><button id="undoBox">撤销改框</button></div>
+        <div class="annotation-controls"><select id="boxProblem" aria-label="新框或改框的问题类型"></select><button id="drawBox" aria-pressed="false">开始框选</button><select id="boxSelect" aria-label="选择已有问题框"></select><button id="editBoxDetails">问题与责任</button><button id="relabelBox">修改框类型</button><button id="deleteBox">删除选中框</button><button id="undoBox">撤销改框</button></div>
         <div class="annotation-controls"><select id="reviewOutcome" aria-label="本次复核结果"><option value="boxed">已框选问题位置</option><option value="labels_correct">原分类正确 / 无需加框</option><option value="needs_correction">需纠正 / 待补真问题框</option><option value="unclear">看不清，继续排除训练</option></select><button id="confirmAnnotation" class="primary" title="补标模式下按 Enter 确认">确认补标并下一张 · Enter</button><button id="reloadAnnotation" class="text-button">重新读取</button><span id="annotationStatus" class="small" role="status"></span></div>
       </section>
-      <div id="photoStage" class="photo-stage" tabindex="0" aria-label="图片画布，滚轮缩放，拖动平移；补标时可拖动选中框及四角调整位置">
+      <div id="photoStage" class="photo-stage" tabindex="0" aria-label="图片画布，右键拖拽框选，左键调整已有框，滚轮缩放">
         <!-- impeccable-disable-next-line broken-image: viewer stays hidden until a real source-image blob is assigned -->
         <img id="photo" alt="" draggable="false" hidden>
         <svg id="annotationOverlay" aria-hidden="true" hidden></svg>
+        <section id="boxEditor" class="box-editor" role="dialog" aria-label="当前问题框的问题与责任" hidden>
+          <div class="box-editor-heading"><h3>问题点</h3><button id="boxEditorClose" class="text-button" title="收起，编辑内容保留；Esc">收起</button></div>
+          <div id="boxEditorProblems" class="chips box-editor-problems" aria-label="选择问题点"></div>
+          <div id="boxEditorResponsibilitySection"><h3>责任 <span class="small muted">可多选</span></h3><div id="boxEditorResponsibilities" class="chips compact" aria-label="选择责任"></div></div>
+          <p id="boxEditorHint" class="small" role="status"></p>
+          <div class="box-editor-actions"><span class="small muted">右键继续框选 · Enter 保存整图</span><button id="boxEditorDone" class="primary">完成此框</button></div>
+        </section>
         <div id="imageMessage" class="image-message"><strong>正在索引原始目录</strong><span>找到图片后即可开始，不必等待全部扫描完成。</span></div>
         <div id="imageBusy" class="image-busy" hidden>正在读取图片…</div>
         <button id="retryImage" class="retry-image" hidden>重新读取</button>
       </div>
       <div class="file-caption"><span id="fileName">原图不移动、不复制</span><button id="locate" class="text-button" disabled>定位原文件</button></div>
-      <div class="viewer-footer"><span>滚轮缩放 · 拖动查看 · 旋转仅影响显示</span><span id="loadHint">按需加载 / 相邻预读</span></div>
+      <div class="viewer-footer"><span>右键画框 · 左键调整 · 滚轮缩放 · Enter 保存</span><span id="loadHint">按需加载 / 相邻预读</span></div>
     </section>
     <aside class="label-panel" aria-label="图片标签" data-step="1">
       <div class="label-scroll">

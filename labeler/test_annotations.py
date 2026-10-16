@@ -2,6 +2,7 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 from PIL import Image
 from app import Store,RESPONSIBILITY_RULES
 from annotations import responsibility_links
@@ -221,6 +222,122 @@ class LocalizationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'Recoverable count changed'):
             recover(self.store.data_dir,'test-run',boundary,True,1)
         self.assertEqual(self.store.annotations.review(self.id)['status'],'pending')
+
+    def quick_payload(self, problem='崩边', roles=None):
+        body=self.payload();body['boxes'][0]['problem']=problem
+        if roles is not None:body['boxes'][0]['responsibilities']=roles
+        body.update(classification_updates={'defects':[problem],
+            'problem_responsibilities':{problem:roles} if roles is not None else {}},
+            expected_classification_draft=None)
+        return body
+
+    def test_box_flow_appends_standard_responsibility_without_removing_old_classification(self):
+        result=self.store.annotations.save(self.id,self.quick_payload('崩边',['运输']))
+        self.assertFalse(result['labels_unchanged'])
+        self.assertEqual(result['document']['boxes'][0]['responsibilities'],['生产'])
+        label=self.store.detail(self.id)['label']
+        self.assertEqual(label['defects'],['其他破损','崩边'])
+        self.assertEqual(label['responsibilities'],['运输','生产'])
+        self.assertEqual(label['problem_responsibilities'],{'其他破损':['运输'],'崩边':['生产']})
+        self.assertEqual(label['note'],'人工原结果')
+        self.assertEqual(result['label_fingerprint'],self.store.annotations.detail(self.id)['label_fingerprint'])
+        self.assertTrue(self.store.annotations.export()['items'][0]['training_eligible_by_label_policy'])
+        self.assertTrue(self.store.annotations.feedback_export()['items'][0]['training_eligible_by_label_policy'])
+        self.store.undo()
+        self.assertEqual(json.loads(self.store.one('SELECT data FROM labels WHERE image_id=?',(self.id,))['data']),self.label)
+        self.assertEqual(len(self.store.annotations.detail(self.id)['document']['boxes']),1)
+        self.assertFalse(self.store.annotations.export()['items'][0]['training_eligible_by_label_policy'])
+
+    def test_box_flow_common_problem_requires_explicit_responsibility_and_known_roles(self):
+        for roles in (None,[],['不存在的责任']):
+            before=self.human()
+            with self.assertRaisesRegex(ValueError,'责任'):
+                self.store.annotations.save(self.id,self.quick_payload('划伤',roles))
+            self.assertEqual(self.human(),before)
+            self.assertEqual(self.store.query('SELECT * FROM annotation_documents'),[])
+        result=self.store.annotations.save(self.id,self.quick_payload('划伤',['运输','安装']))
+        self.assertEqual(result['document']['boxes'][0]['responsibilities'],['运输','安装'])
+        self.assertEqual(result['label']['problem_responsibilities']['划伤'],['运输','安装'])
+
+    def test_box_flow_material_default_and_pending_manual_responsibility(self):
+        self.store.add_tag('defect','五金质量')
+        body=self.quick_payload('五金质量')
+        body['boxes'].append({'id':'scratch','problem':'划伤','x':.5,'y':.1,'w':.2,'h':.2,'responsibilities':['待核']})
+        result=self.store.annotations.save(self.id,body)
+        self.assertEqual(result['document']['boxes'][0]['responsibilities'],['原材料'])
+        self.assertEqual(result['document']['boxes'][1]['responsibilities'],['待核'])
+        self.assertEqual(result['label']['problem_responsibilities']['划伤'],['待核'])
+
+    def test_box_flow_draft_retains_roles_and_updates_but_never_changes_or_trains_labels(self):
+        before=self.human();body=self.quick_payload('划伤',['安装']);body['status']='draft'
+        result=self.store.annotations.save(self.id,body)
+        self.assertTrue(result['labels_unchanged']);self.assertEqual(self.human(),before)
+        self.assertEqual(result['document']['boxes'][0]['responsibilities'],['安装'])
+        self.assertEqual(result['document']['classification_updates']['defects'],['划伤'])
+        self.assertFalse(self.store.annotations.export()['items'][0]['training_eligible_by_label_policy'])
+        self.assertEqual(self.store.annotations.feedback_export()['items'],[])
+        body=self.quick_payload('划伤',['安装']);body['classification_updates']=result['document']['classification_updates']
+        confirmed=self.store.annotations.save(self.id,body)
+        self.assertEqual(confirmed['document']['boxes'][0]['responsibilities'],['安装'])
+        self.assertTrue(self.store.annotations.export()['items'][0]['training_eligible_by_label_policy'])
+
+    def test_box_flow_concurrency_is_atomic_and_keeps_existing_manual_boxes(self):
+        self.store.annotations.save(self.id,self.payload());body=self.quick_payload()
+        body['boxes'].append({'id':'new','problem':'划伤','x':.5,'y':.1,'w':.2,'h':.2,'responsibilities':['运输']})
+        old_box=dict(self.store.annotations.detail(self.id)['document']['boxes'][0])
+        old_history=self.store.query('SELECT * FROM annotation_history')
+        for field,value in [('label_fingerprint','stale'),('expected_version',0)]:
+            invalid={**body,field:value};before=self.human()
+            with self.assertRaises(ValueError):self.store.annotations.save(self.id,invalid)
+            self.assertEqual(self.human(),before)
+            self.assertEqual(self.store.query('SELECT * FROM annotation_history'),old_history)
+        result=self.store.annotations.save(self.id,body)
+        saved=result['document']['boxes'][0]
+        self.assertTrue(all(saved[key]==value for key,value in old_box.items()))
+        self.assertEqual(len(result['document']['boxes']),2)
+
+    def test_box_flow_current_visible_draft_is_merged_only_with_exact_fingerprint(self):
+        draft={**self.label,'defects':['划伤'],'responsibilities':['安装'],
+            'problem_responsibilities':{'划伤':['安装']},'note':'本次可见备注'}
+        saved=self.store.save_draft(self.id,draft);body=self.quick_payload()
+        before=self.human()
+        with self.assertRaisesRegex(ValueError,'分类暂存已变化'):self.store.annotations.save(self.id,body)
+        self.assertEqual(self.human(),before)
+        body['expected_classification_draft']=saved['draft_fingerprint']
+        result=self.store.annotations.save(self.id,body)
+        self.assertEqual(result['label']['defects'],['其他破损','划伤','崩边'])
+        self.assertEqual(result['label']['note'],'本次可见备注')
+        self.assertFalse(self.store.detail(self.id)['has_draft'])
+        self.assertTrue(self.store.annotations.export()['items'][0]['training_eligible_by_label_policy'])
+        body=self.quick_payload();body['expected_classification_draft']=saved['draft_fingerprint']
+        with self.assertRaisesRegex(ValueError,'分类暂存已变化'):self.store.annotations.save(self.id,body)
+
+    def test_box_flow_image_states_cannot_be_changed_to_bypass_training_exclusion(self):
+        for state in ('normal','unclear','unrelated'):
+            self.store.commit([(self.id,{'defects':[],'responsibilities':['待核'],'image_state':state,'note':'保留状态'})])
+            before=self.human()
+            with self.assertRaisesRegex(ValueError,'图片已有状态'):self.store.annotations.save(self.id,self.quick_payload())
+            self.assertEqual(self.human(),before)
+        self.store.commit([(self.id,self.label)])
+        draft=self.store.save_draft(self.id,{'defects':[],'responsibilities':['待核'],'image_state':'unclear'})
+        body=self.quick_payload();body['expected_classification_draft']=draft['draft_fingerprint']
+        with self.assertRaisesRegex(ValueError,'图片已有状态'):self.store.annotations.save(self.id,body)
+
+    def test_old_client_preserves_box_roles_without_optin_classification_changes(self):
+        first=self.store.annotations.save(self.id,self.quick_payload())
+        body=self.payload();body['boxes']=first['document']['boxes']
+        del body['boxes'][0]['responsibilities']
+        before=self.human();result=self.store.annotations.save(self.id,body)
+        self.assertEqual(self.human(),before);self.assertTrue(result['labels_unchanged'])
+        self.assertEqual(result['document']['boxes'][0]['responsibilities'],['生产'])
+
+    def test_box_flow_failed_feedback_write_rolls_back_labels_frames_and_history_together(self):
+        before=self.human();body=self.quick_payload()
+        with patch.object(self.store.annotations,'_record_feedback',side_effect=ValueError('反馈写入失败')):
+            with self.assertRaisesRegex(ValueError,'反馈写入失败'):self.store.annotations.save(self.id,body)
+        self.assertEqual(self.human(),before)
+        self.assertEqual(self.store.query('SELECT * FROM annotation_documents'),[])
+        self.assertEqual(self.store.query('SELECT * FROM annotation_history'),[])
 
 
 if __name__=='__main__':unittest.main()

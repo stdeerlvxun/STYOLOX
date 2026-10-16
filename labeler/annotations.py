@@ -1,4 +1,4 @@
-"""Versioned localization supplements and model error review; never rewrite labels."""
+"""Versioned localization supplements and explicit, append-only box classification."""
 from collections import Counter, defaultdict
 import hashlib
 import io
@@ -262,6 +262,84 @@ class Annotations:
                 'label_fingerprint':fingerprint(label['data'] if label else ''),'review':self.review(image_id),
                 'proposal':self.proposal(image_id,source)}
 
+    def _box_roles(self, values, required=False):
+        if not isinstance(values,list) or len(values)>40 or any(not isinstance(v,str) for v in values):
+            raise ValueError('问题框责任格式不正确')
+        values=list(dict.fromkeys(v.strip() for v in values if v.strip()))
+        if any(v not in self.store.tags()['responsibility'] for v in values):
+            raise ValueError('请选择已有责任类型')
+        if '待核' in values and len(values)>1:values.remove('待核')
+        if required and not values:raise ValueError('请为问题点选择责任；不确定可选“待核”')
+        return values
+
+    def _classification_append(self, image_id, body, boxes, previous, label, status):
+        """Prepare an explicit union without writing: the caller owns the one transaction."""
+        from app import RESPONSIBILITY_RULES
+        updates=body['classification_updates']
+        if not isinstance(updates,dict):raise ValueError('问题点追加格式不正确')
+        if any(k not in ('defects','responsibilities','problem_responsibilities') for k in updates):
+            raise ValueError('框选仅支持追加问题点和责任')
+        problems=updates.get('defects',[])
+        if (not isinstance(problems,list) or len(problems)>40 or
+            any(not isinstance(p,str) or p not in self.store.tags()['defect'] for p in problems)):
+            raise ValueError('请选择已有问题点')
+        if 'responsibilities' in updates:self._box_roles(updates['responsibilities'])
+        mapping=updates.get('problem_responsibilities',{})
+        if not isinstance(mapping,dict) or any(p not in problems for p in mapping):
+            raise ValueError('问题点责任格式不正确')
+        mapping={p:self._box_roles(v) for p,v in mapping.items()}
+        committed=json.loads(label['data']) if label else None
+        draft=self.store.one('SELECT * FROM drafts WHERE image_id=?',(image_id,))
+        visible=json.loads(draft['data']) if draft else None
+        if status=='confirmed':
+            expected=body.get('expected_classification_draft')
+            actual=fingerprint(draft['data']) if draft else None
+            if expected!=actual:
+                raise ValueError('分类暂存已变化，请重新读取；原结果未覆盖')
+            if any(v and v.get('image_state','') in ('normal','unclear','unrelated') for v in (committed,visible)):
+                raise ValueError('图片已有状态，请先明确复核原分类；框选不能自动改变图片状态')
+        base=dict(committed or {'defects':[],'responsibilities':[],'image_state':'','note':''})
+        base['defects']=list(base.get('defects',[]));base['responsibilities']=list(base.get('responsibilities',[]))
+        resolved={p:list(v) for p,v in base.get('problem_responsibilities',{}).items()}
+        if not resolved and len(base['defects'])==1:
+            resolved[base['defects'][0]]=list(base['responsibilities'])
+        if visible:
+            base['defects']=list(dict.fromkeys(base['defects']+visible.get('defects',[])))
+            base['responsibilities']=list(dict.fromkeys(base['responsibilities']+visible.get('responsibilities',[])))
+            visible_mapping=visible.get('problem_responsibilities',{})
+            if not visible_mapping and len(visible.get('defects',[]))==1:
+                visible_mapping={visible['defects'][0]:visible.get('responsibilities',[])}
+            for p,roles in visible_mapping.items():resolved[p]=list(dict.fromkeys(resolved.get(p,[])+roles))
+            base['note']=visible.get('note','')
+        old_boxes={b['id']:b for b in (previous or {}).get('boxes',[])}
+        requested=list(dict.fromkeys(problems+[b['problem'] for b in boxes]))
+        for box in boxes:
+            problem=box['problem'];old=old_boxes.get(box['id'],{})
+            roles=box.get('responsibilities',mapping.get(problem))
+            if roles is None and old.get('problem')==problem:roles=old.get('responsibilities')
+            if roles is None:roles=resolved.get(problem,[])
+            roles=self._box_roles(roles)
+            if problem in RESPONSIBILITY_RULES:roles=[RESPONSIBILITY_RULES[problem]]
+            if status=='confirmed' and not roles:
+                raise ValueError('请为“'+problem+'”选择责任；不确定可选“待核”')
+            box['responsibilities']=roles
+            mapping[problem]=roles if problem in RESPONSIBILITY_RULES else list(dict.fromkeys(mapping.get(problem,[])+roles))
+        for problem in requested:
+            roles=mapping.get(problem,[])
+            if problem in RESPONSIBILITY_RULES:roles=[RESPONSIBILITY_RULES[problem]]
+            if not roles:roles=resolved.get(problem,[])
+            if status=='confirmed' and not roles:
+                raise ValueError('请为“'+problem+'”选择责任；不确定可选“待核”')
+            resolved[problem]=list(dict.fromkeys(resolved.get(problem,[])+roles))
+        base['defects']=list(dict.fromkeys(base['defects']+requested))
+        base['problem_responsibilities']=resolved
+        base['responsibilities']=list(dict.fromkeys(base['responsibilities']+[r for roles in resolved.values() for r in roles]))
+        if len(base['responsibilities'])>1 and '待核' in base['responsibilities']:base['responsibilities'].remove('待核')
+        if base['defects']:base['image_state']='defect'
+        if len(base['defects'])>40:raise ValueError('每张图片最多40个问题点')
+        return base,draft,{'defects':requested,
+            'problem_responsibilities':mapping}
+
     def save(self, image_id, body):
         source = self.source(image_id)
         if body.get('source_sha256')!=source['sha256']:raise ValueError('原图已变化，请重新读取后补标')
@@ -285,6 +363,7 @@ class Annotations:
             x,y,w,h=values
             if min(x,y)<0 or min(w,h)<=0 or x+w>1.000001 or y+h>1.000001:raise ValueError('问题框必须位于原图内')
             item=dict(id=identity,problem=problem,x=x,y=y,w=min(w,1-x),h=min(h,1-y))
+            if 'responsibilities' in box:item['responsibilities']=self._box_roles(box['responsibilities'])
             if box.get('origin')=='model':
                 if not proposal_id or box.get('proposal_id')!=proposal_id:raise ValueError('模型框来源不正确')
                 item.update(origin='model',proposal_id=proposal_id)
@@ -296,9 +375,15 @@ class Annotations:
             identities.add(identity)
         if status=='confirmed' and outcome=='boxed' and not clean:raise ValueError('请框选问题，或选择其他复核结果')
         with self.store.lock,self.store.db:
+            if not self.store.db.in_transaction:self.store.db.execute('BEGIN IMMEDIATE')
             row=self.store.one('SELECT * FROM annotation_documents WHERE image_id=?',(image_id,))
             if (row['version'] if row else 0)!=version:raise ValueError('补标已被其他页面更新，请重新读取；原结果未覆盖')
             previous=json.loads(row['data']) if row else None
+            previous_boxes={b['id']:b for b in (previous or {}).get('boxes',[])}
+            for box in clean:
+                old=previous_boxes.get(box['id'],{})
+                if 'responsibilities' not in box and old.get('problem')==box['problem'] and 'responsibilities' in old:
+                    box['responsibilities']=list(old['responsibilities'])
             regions=clean_negative_regions(body.get('negative_regions',previous.get('negative_regions',[]) if previous else []))
             if status=='confirmed':reject_conflicting_regions(clean,regions)
             if proposal_id:
@@ -313,13 +398,28 @@ class Annotations:
                     current_boxes={box['id']:box for box in clean}
                     if any(current_boxes.get(box['id'])!=box for box in previous['boxes']):
                         raise ValueError('已有独立人工补标，自动框不能覆盖原结果')
-            label=self.store.one('SELECT data FROM labels WHERE image_id=?',(image_id,))
+            label=self.store.one('SELECT * FROM labels WHERE image_id=?',(image_id,))
             label_hash=fingerprint(label['data'] if label else '')
             if status=='confirmed' and body.get('label_fingerprint')!=label_hash:
                 raise ValueError('人工分类已更新，请重新读取后确认补标')
+            classification=None;draft=None;updates=None;labels_changed=False
+            if 'classification_updates' in body:
+                classification,draft,updates=self._classification_append(image_id,body,clean,previous,label,status)
+                if status=='confirmed':
+                    label_raw=json.dumps(classification,ensure_ascii=False,separators=(',',':'))
+                    labels_changed=not label or label_raw!=label['data']
+                    stamp=dt.datetime.now(dt.timezone.utc).isoformat()
+                    if labels_changed:
+                        self.store.db.execute('INSERT OR REPLACE INTO labels VALUES(?,?,?)',(image_id,label_raw,stamp))
+                        changes=[{'id':image_id,'before':label,'after':classification}]
+                        self.store.db.execute('INSERT INTO history(root_id,kind,data,created_at) VALUES(?,?,?,?)',
+                            (self.store.current_root()['id'],'annotation_append',json.dumps(changes,ensure_ascii=False,separators=(',',':')),stamp))
+                    if draft:self.store.db.execute('DELETE FROM drafts WHERE image_id=?',(image_id,))
+                    label_hash=fingerprint(label_raw)
             document={'source':source,'coordinate_space':'exif_transposed_normalized_xywh',
                 'boxes':clean,'negative_regions':regions,'status':status,'outcome':outcome,'label_fingerprint':label_hash,
                 'review_run':body.get('review_run')}
+            if updates is not None:document['classification_updates']=updates
             if proposal_id:
                 document.update(proposal_id=proposal_id,model_id=proposal['model_id'],method=proposal['method'],
                     origin='machine_assisted_human_confirmed' if status=='confirmed' else 'machine_assisted_draft')
@@ -342,7 +442,10 @@ class Annotations:
                         ('accepted' if outcome=='boxed' and clean else 'rejected',stamp,image_id,proposal_id))
                 self.store.db.execute("UPDATE error_reviews SET status='reviewed',reviewed_at=? WHERE image_id=? AND run_id=?",
                     (stamp,image_id,body.get('review_run')))
-        return {'saved':True,'version':next_version,'document':document,'labels_unchanged':True}
+        result={'saved':True,'version':next_version,'document':document,'labels_unchanged':not labels_changed,
+            'label_fingerprint':label_hash}
+        if classification is not None and status=='confirmed':result['label']=classification
+        return result
 
     def _record_feedback(self, image_id, data, stamp):
         raw=json.dumps(data,ensure_ascii=False,sort_keys=True,separators=(',',':'))

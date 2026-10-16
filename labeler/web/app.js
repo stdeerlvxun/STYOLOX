@@ -299,7 +299,8 @@ async function saveDraft(){
   const record=S.current,protectedSave=!!record.recommendation_applied;
   const task=S.saveTail.catch(()=>{}).then(async()=>{
     const result=await api('/api/draft',{id,label,only_unclassified:protectedSave,expected_draft:record.recommendation_draft_fingerprint||null});
-    record.recommendation_draft_fingerprint=result.draft_fingerprint;return result;
+    record.recommendation_draft_fingerprint=result.draft_fingerprint;
+    record.draft_fingerprint=result.draft_fingerprint;record.has_draft=true;return result;
   });S.saveTail=task;
   try{await task;if(S.current?.id===id&&S.revision===revision){S.dirty=false;saveIndicator('已暂存','saved');}}
   catch(error){if(S.current?.id===id){S.dirty=true;saveIndicator('暂存失败，请重试','unsaved');}throw error;}

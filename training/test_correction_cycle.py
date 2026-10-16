@@ -3,6 +3,7 @@ import hashlib
 import json
 from pathlib import Path
 import tempfile
+from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
@@ -40,6 +41,31 @@ def config(root):
 
 
 class CycleProtectionTests(unittest.TestCase):
+    @unittest.skipUnless(worker.os.name=='nt', 'Windows process startup contract')
+    def test_worker_children_do_not_create_windows(self):
+        completed = SimpleNamespace(returncode=0, stdout='done', stderr='')
+        for executable in ('python.exe', 'ssh', 'scp', 'nvidia-smi'):
+            with self.subTest(executable=executable), patch.object(worker.subprocess, 'run', return_value=completed) as launch:
+                self.assertEqual(worker.run_process([executable, '--version'], timeout=15), 'done')
+                options = launch.call_args.kwargs
+                self.assertFalse(options['shell'])
+                self.assertEqual(options['creationflags'], worker.subprocess.CREATE_NO_WINDOW)
+                self.assertTrue(options['startupinfo'].dwFlags & worker.subprocess.STARTF_USESHOWWINDOW)
+                self.assertEqual(options['startupinfo'].wShowWindow, worker.subprocess.SW_HIDE)
+
+    def test_non_windows_children_use_portable_options(self):
+        completed = SimpleNamespace(returncode=0, stdout='done', stderr='')
+        with patch.object(worker.os, 'name', 'posix'), patch.object(worker.subprocess, 'run', return_value=completed) as launch:
+            self.assertEqual(worker.run_process(['python', '--version'], timeout=15), 'done')
+        self.assertNotIn('creationflags', launch.call_args.kwargs)
+        self.assertNotIn('startupinfo', launch.call_args.kwargs)
+
+    @unittest.skipUnless(worker.os.name=='nt', 'Actual Windows child console check')
+    def test_actual_python_child_has_no_console(self):
+        result = worker.run_process([worker.sys.executable, '-c',
+            'import ctypes; print(ctypes.windll.kernel32.GetConsoleWindow())'], timeout=15)
+        self.assertEqual(result.strip(), '0')
+
     def test_twenty_saves_on_one_image_do_not_trigger_training(self):
         payload = {'items':[item(1, i) for i in range(1, 21)]}
         eligible = worker.eligible_pending(payload)
