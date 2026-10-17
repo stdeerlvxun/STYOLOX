@@ -6,7 +6,72 @@ from types import SimpleNamespace
 from unittest.mock import patch
 import torch
 
-from train_detector import adaptable_parameter, compare_validation, evaluate_predictions, location_training_records, match_boxes, partial_objectness_loss, select_threshold, xyxy_iou
+from train_detector import (adaptable_parameter, compare_validation, evaluate_predictions,
+    localization_optimizer_groups, localization_parameter_group, localization_selection_key,
+    location_training_records, match_boxes, partial_objectness_loss, select_threshold,
+    training_phase, validate_training_modes, xyxy_iou)
+
+
+class LocalizationFocusTests(unittest.TestCase):
+    def test_requires_typed_retained_adaptation_and_fixed_threshold(self):
+        valid = dict(initialize_from='retained', adapt_backbone=True, fixed_threshold=.05,
+                     localization_focus=True)
+        validate_training_modes(**valid)
+        for changes in ({'initialize_from': None}, {'adapt_backbone': False},
+                        {'fixed_threshold': None}, {'location_only': True}, {'correction_focus': True}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                validate_training_modes(**{**valid, **changes})
+
+    def test_optimizer_groups_cover_trainable_head_and_late_features_once(self):
+        names = ['backbone.backbone.stem.conv.weight', 'backbone.backbone.dark3.0.conv.weight',
+                 'backbone.backbone.dark4.0.conv.weight', 'backbone.backbone.dark5.0.conv.weight',
+                 'backbone.C3_p3.conv1.conv.weight', 'head.cls_convs.0.0.conv.weight',
+                 'head.cls_preds.0.weight', 'head.reg_convs.0.0.conv.weight',
+                 'head.reg_preds.0.weight', 'head.obj_preds.0.weight', 'head.stems.0.conv.weight']
+        parameters = {name: torch.nn.Parameter(torch.ones(1)) for name in names}
+        model = SimpleNamespace(named_parameters=lambda: list(parameters.items()))
+        groups = localization_optimizer_groups(model)
+        self.assertEqual({g['name']: g['lr'] for g in groups},
+                         {'classification': .0001, 'geometry': .00005, 'late_features': .00001})
+        actual = [id(p) for g in groups for p in g['params']]
+        expected = [id(p) for n, p in parameters.items() if adaptable_parameter(n)]
+        self.assertCountEqual(actual, expected)
+        self.assertEqual(len(actual), len(set(actual)))
+        self.assertEqual(localization_parameter_group('head.stems.0.conv.weight'), ('geometry', .00005))
+        parameters['head.cls_preds.0.weight'].requires_grad_(False)
+        updated = [id(p) for g in localization_optimizer_groups(model) for p in g['params']]
+        self.assertNotIn(id(parameters['head.cls_preds.0.weight']), updated)
+
+    def test_joint_localization_begins_at_first_epoch(self):
+        self.assertEqual(training_phase(1, 50, 0., 600., localization_focus=True), 'joint')
+        self.assertEqual(training_phase(1, 50, 0., 600., correction_focus=True), 'classification')
+        self.assertEqual(training_phase(31, 50, 0., 600., correction_focus=True), 'joint')
+        self.assertEqual(training_phase(2, 50, 400., 600., correction_focus=True), 'joint')
+
+    def report(self, recall=.6, f2=.5, fp=10, typed_recall=.3, typed_f2=.2, typed_fp=15):
+        return {'location_only': {'recall': recall, 'f2': f2, 'fp': fp},
+                'class_and_location': {'recall': typed_recall, 'f2': typed_f2,
+                                      'fp': typed_fp, 'precision': .2}}
+
+    def test_initialization_beats_any_location_or_typed_regression(self):
+        baseline = self.report()
+        initial = localization_selection_key(baseline, baseline, 0)
+        for report in (self.report(recall=.59, f2=.7, fp=2),
+                       self.report(recall=.8, f2=.7, fp=11),
+                       self.report(recall=.8, f2=.7, typed_recall=.29),
+                       self.report(recall=.8, f2=.7, typed_f2=.19),
+                       self.report(recall=.8, f2=.7, typed_fp=16)):
+            with self.subTest(report=report):
+                self.assertGreater(initial, localization_selection_key(report, baseline, 1))
+
+    def test_safe_selection_prioritizes_location_f2_before_typed_f2(self):
+        baseline = self.report()
+        better_location = self.report(f2=.6, typed_f2=.21)
+        better_type = self.report(f2=.55, typed_f2=.4)
+        self.assertGreater(localization_selection_key(better_location, baseline, 5),
+                           localization_selection_key(better_type, baseline, 10))
+        self.assertGreater(localization_selection_key(self.report(recall=.7), baseline, 5),
+                           localization_selection_key(better_location, baseline, 1))
 
 
 class DetectorMetricsTests(unittest.TestCase):

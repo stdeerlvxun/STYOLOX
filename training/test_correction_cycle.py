@@ -247,6 +247,17 @@ class CycleProtectionTests(unittest.TestCase):
                 changed = copy.deepcopy(valid);changed[key] = value
                 with self.assertRaises(ValueError):worker.validate_config(changed)
 
+    def test_localization_training_cannot_drop_types_or_combine_conflicting_modes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            valid = {**config(Path(directory)), 'localization_focus_enabled':True,
+                     'fixed_threshold':.05, 'class_agnostic':False,
+                     'correction_focus_enabled':False}
+            self.assertIs(worker.validate_config(valid), valid)
+            for change in ({'class_agnostic':True}, {'correction_focus_enabled':True},
+                           {'fixed_threshold':None}, {'localization_focus_enabled':'true'}):
+                with self.subTest(change=change), self.assertRaises(ValueError):
+                    worker.validate_config({**valid, **change})
+
 
 if __name__=='__main__':
     unittest.main()

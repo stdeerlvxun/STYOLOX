@@ -1,6 +1,6 @@
 {
   "training": {
-    "source_commit": "d10ca6d47a2e4a338dfbd7ccc311307fbff9ab0f",
+    "source_commit": "ab1314aa9ed41a265e875d857fa49b23af8d51e4",
     "files": [
       {
         "path": ".gitignore",
@@ -24,11 +24,11 @@
       },
       {
         "path": "REVIEW_LOOP.md",
-        "sha256": "afafbbe2967e4754a09df0dfe0d4e52a5ccb0d66d18e5e29b51f1bf90737d9c0"
+        "sha256": "b4b7749a57b078aabf68e5c343ec269dbe8a73a2d1f21595dbdc9d1be3df066a"
       },
       {
         "path": "correction_cycle.py",
-        "sha256": "ef06880004186eb27fb0f808f0b7def33a9f0a32b1b470d9b7116bf80d889db8"
+        "sha256": "a7a3397379ab888ba4e18ef776e46ef2cea0747128263965a790748e8cb649c3"
       },
       {
         "path": "correction_focus.py",
@@ -104,7 +104,7 @@
       },
       {
         "path": "test_correction_cycle.py",
-        "sha256": "8ec20e68da34d930035a7f812b7499b6e3fd4c2670dcbd051a5176b901643af8"
+        "sha256": "fa8b7bdb229dd0a65204fec704edcb3410c9cac279ae12bd8dbce83e6d4853fd"
       },
       {
         "path": "test_correction_focus.py",
@@ -152,7 +152,7 @@
       },
       {
         "path": "test_train_detector.py",
-        "sha256": "152d1f9e9afbba14c84033468200d76650cf26b0b8893e3d2da935dbd4f9998a"
+        "sha256": "58f3eaf4f4932ad97dfc66289f632a69044ccca46050f2e54b072584c5e6d466"
       },
       {
         "path": "test_training_report.py",
@@ -168,7 +168,7 @@
       },
       {
         "path": "train_detector.py",
-        "sha256": "f6458c418d2ae85ba17596ebdba1d7a7ef2be85c3a92d6fa0e5d96cb6e0cf4d5"
+        "sha256": "8e3c83464e3e84762dde61c983fe18f57d99cfb98e6e3be849249697cb02c84e"
       },
       {
         "path": "training_report.py",

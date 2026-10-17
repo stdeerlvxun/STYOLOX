@@ -64,10 +64,14 @@ def validate_config(config):
         raise ValueError('class_agnostic must be a boolean')
     if type(config.get('correction_focus_enabled',False)) is not bool:
         raise ValueError('correction_focus_enabled must be a boolean')
+    if type(config.get('localization_focus_enabled',False)) is not bool:
+        raise ValueError('localization_focus_enabled must be a boolean')
     if type(config.get('roi_verifier_enabled',False)) is not bool:
         raise ValueError('roi_verifier_enabled must be a boolean')
     if config.get('correction_focus_enabled') and config.get('class_agnostic'):
         raise ValueError('Correction focus must retain real issue classes')
+    if config.get('localization_focus_enabled') and (config.get('class_agnostic') or config.get('correction_focus_enabled') or config.get('fixed_threshold') is None):
+        raise ValueError('Localization focus requires typed classes, a fixed threshold, and no classification-first mode')
     cutoff=config.get('fixed_threshold')
     if cutoff is not None and (type(cutoff) not in (int,float) or not math.isfinite(cutoff) or not 0<cutoff<1):
         raise ValueError('fixed_threshold must be a finite fraction')
@@ -351,16 +355,18 @@ def execute_cycle(config, config_path, payload, items, run, report):
     if not included:
         report.update(status='waiting_for_trainable_confirmed_images', feedback_ids_actually_trained=[])
         return report
+    focused_training = config.get('correction_focus_enabled') or config.get('localization_focus_enabled')
     training_arguments=[python, root/'train_detector.py', '--dataset', dataset_path, '--run', detector,
                  '--adapt-backbone', '--input-size', '640', '--batch-size',
-                 '4' if config.get('correction_focus_enabled') else '2', '--epochs', '50',
-                 '--seconds', '900' if config.get('correction_focus_enabled') else '240',
+                 '4' if focused_training else '2', '--epochs', '50',
+                 '--seconds', '900' if focused_training else '240',
                  '--initialize-from', config['current_detector_run'], '--defer-test']
     if config.get('correction_focus_enabled'):training_arguments.append('--correction-focus')
+    if config.get('localization_focus_enabled'):training_arguments.append('--localization-focus')
     if config.get('class_agnostic',False):training_arguments.append('--class-agnostic')
     if config.get('fixed_threshold') is not None:
         training_arguments.extend(['--fixed-threshold',str(config['fixed_threshold'])])
-    run_process(training_arguments,timeout=1200 if config.get('correction_focus_enabled') else 600,
+    run_process(training_arguments,timeout=1200 if focused_training else 600,
                 cwd=root,log=run/'train.log')
     if config.get('roi_verifier_enabled') and sum(len(row.get('negative_rois',[]))
             for row in dataset.get('negative_feedback_records',[])) >= 5:

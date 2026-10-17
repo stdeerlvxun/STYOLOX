@@ -167,6 +167,50 @@ def correction_selection_key(report, baseline, epoch):
     return (safe, location['recall'], typed['f2'], -location['fp'], typed['precision'], -epoch)
 
 
+def validate_training_modes(*, initialize_from, adapt_backbone, fixed_threshold,
+                            location_only=False, correction_focus=False, localization_focus=False):
+    if correction_focus and (location_only or not initialize_from or fixed_threshold is None):
+        raise ValueError('Correction focus requires a retained typed model and a fixed threshold')
+    if localization_focus and (location_only or correction_focus or not initialize_from
+                               or not adapt_backbone or fixed_threshold is None):
+        raise ValueError('Localization focus requires a retained typed model, backbone adaptation, '
+                         'and a fixed threshold; other focus/location-only modes are incompatible')
+
+
+def localization_parameter_group(name):
+    """Late feature adaptation and full head geometry learn together from epoch one."""
+    if not adaptable_parameter(name):
+        return 'frozen', 0.
+    if name.startswith(('head.cls_convs.', 'head.cls_preds.')):
+        return 'classification', .0001
+    if name.startswith('head.'):
+        return 'geometry', .00005
+    return 'late_features', .00001
+
+
+def localization_optimizer_groups(model):
+    groups = {}
+    for name, parameter in model.named_parameters():
+        group, learning_rate = localization_parameter_group(name)
+        if group == 'frozen' or not parameter.requires_grad:
+            continue
+        groups.setdefault(group, {'name': group, 'lr': learning_rate, 'params': []})['params'].append(parameter)
+    return list(groups.values())
+
+
+def training_phase(epoch, epochs, elapsed, seconds, correction_focus=False, localization_focus=False):
+    if localization_focus or not correction_focus:
+        return 'joint'
+    return 'joint' if epoch > max(1, epochs*3//5) or elapsed >= seconds*.65 else 'classification'
+
+
+def localization_selection_key(report, baseline, epoch):
+    """Keep typed and location safety, then prioritize finding all problem locations."""
+    safe = correction_selection_key(report, baseline, epoch)[0]
+    location, typed = report['location_only'], report['class_and_location']
+    return (safe, location['recall'], location['f2'], -location['fp'], typed['f2'], -epoch)
+
+
 def read_rgb(image):
     if isinstance(image, (str, Path)):
         with Image.open(image) as source:
@@ -317,7 +361,10 @@ def feedback_sample(record, rgb, input_size, max_labels):
 
 def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_size=512,
           adapt_backbone=False, defer_test=False, initialize_from=None,
-          location_only=False, fixed_threshold=None, correction_focus=False):
+          location_only=False, fixed_threshold=None, correction_focus=False, localization_focus=False):
+    validate_training_modes(initialize_from=initialize_from, adapt_backbone=adapt_backbone,
+        fixed_threshold=fixed_threshold, location_only=location_only,
+        correction_focus=correction_focus, localization_focus=localization_focus)
     started = time.monotonic()
     run_dir = Path(run_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -342,14 +389,17 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
     config['class_agnostic'] = location_only
     config['fixed_threshold'] = fixed_threshold
     config['correction_focus'] = bool(correction_focus)
-    if correction_focus and (location_only or not initialize_from or fixed_threshold is None):
-        raise ValueError('Correction focus requires a retained typed model and a fixed threshold')
+    config['localization_focus'] = bool(localization_focus)
     if correction_focus:
         config.update(backbone_frozen=True, train_head_only=True,
                       frozen_early_layers=['all_backbone_and_neck', 'head.stems'],
                       batch_norm_running_statistics_frozen=True, learning_rate=.00003)
     if fixed_threshold is not None:
         config['selection'] = 'Fixed threshold; validation recall with FP <= 2*GT, then F2; over-budget fallback F2'
+    if localization_focus:
+        config['selection'] = 'Initialization non-regression for typed and location metrics; prioritize location recall, F2, then fewer FP'
+        config['learning_rate'] = None
+        config['optimizer_learning_rates'] = {'classification': .0001, 'geometry': .00005, 'late_features': .00001}
     config['partial_annotations'] = 'For images with classified problems lacking boxes, ignore unmatched objectness anchors; retain positives and all class/regression losses'
     write_json(run_dir/'planned-config.json', config)
     dataset = json.loads(Path(dataset_path).read_text(encoding='utf-8-sig'))
@@ -388,15 +438,22 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
             raise ValueError('Normal ROI feedback image violates unchanged classification exclusions')
     hard_positive_records, config['human_correction_extra_practice'] = hard_positive_repeats(splits['train'])
     focus_records = []
-    if correction_focus:
+    if correction_focus or localization_focus:
         from correction_focus import select_focus_records
         focus_records, focus_report = select_focus_records(splits['train'])
         hard_positive_records = []  # Use real local views instead of repeating the same full image.
+    if correction_focus:
         config['correction_focus_policy'] = {**focus_report,
             'classification_epochs': max(1, epochs*3//5), 'classification_lr': .00003,
             'geometry_lr': .00001, 'geometry_scope': 'head only; retained backbone and neck frozen',
             'minimum_joint_epochs': min(5, max(1, epochs//4)),
             'selection': 'same fixed validation threshold; class and location must not regress from initialization'}
+    if localization_focus:
+        config['localization_focus_policy'] = {**focus_report,
+            'phase': 'joint from epoch one', 'l1_enabled_from_epoch': 1,
+            'geometry_scope': 'head, neck and dark4/dark5; early features and all BN statistics frozen',
+            'selection': config['selection'], 'human_normal_roi_weight': .25,
+            'extra_full_image_repeats': 0}
     torch.set_num_threads(2)
     random.seed(config['seed'])
     np.random.seed(config['seed'])
@@ -422,6 +479,10 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
     if initialize_from:
         checkpoint_path = Path(initialize_from)/'detector.pt'
         checkpoint = torch.load(checkpoint_path, map_location='cpu', weights_only=False)
+        if localization_focus and (checkpoint['config'].get('class_agnostic')
+                or checkpoint['config'].get('location_only')
+                or any(c['name'] == '问题位置' for c in checkpoint['categories'])):
+            raise ValueError('Localization focus requires a typed initialization checkpoint')
         matching = transferred_state(model.state_dict(), checkpoint, categories)
         config['initialize_from'] = str(checkpoint_path)
         config['initialize_from_sha256'] = sha256(checkpoint_path)
@@ -454,7 +515,9 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
                {'names': [name for name, p in model.named_parameters() if p.requires_grad],
                 'count': sum(p.numel() for p in model.parameters() if p.requires_grad)})
     model = model.to(device)
-    if correction_focus:
+    if localization_focus:
+        optimizer = torch.optim.AdamW(localization_optimizer_groups(model), weight_decay=config['weight_decay'])
+    elif correction_focus:
         optimizer = torch.optim.AdamW([
             {'params': [p for n,p in model.named_parameters() if parameter_phase(n,'joint') == 'classification'], 'lr': .00003},
             {'params': [p for n,p in model.named_parameters() if parameter_phase(n,'joint') == 'geometry'], 'lr': .00001}],
@@ -462,6 +525,10 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
     else:
         optimizer = torch.optim.AdamW([p for p in model.parameters() if p.requires_grad],
                                      lr=config['learning_rate'], weight_decay=config['weight_decay'])
+    if localization_focus:
+        config['actual_optimizer_groups'] = [{'name': group['name'], 'lr': group['lr'],
+            'parameter_tensors': len(group['params']),
+            'parameter_count': sum(p.numel() for p in group['params'])} for group in optimizer.param_groups]
     partial_batch = []
     roi_batch = []
     centers = anchor_centers(input_size, device)
@@ -479,15 +546,16 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
     best_selection = None
     history = []
     initial_report = None
-    if correction_focus:
+    if correction_focus or localization_focus:
         initial_predictions = predict_records(detector, splits['val'], cache)
         initial_report, _ = evaluate_predictions(splits['val'], initial_predictions, categories, fixed_threshold)
         write_json(run_dir/'initial-validation.json', initial_report)
         best_state = {name: value.detach().cpu().clone() for name, value in model.state_dict().items()}
-        best_key = correction_selection_key(initial_report, initial_report, 0)
+        selection_key = localization_selection_key if localization_focus else correction_selection_key
+        best_key = selection_key(initial_report, initial_report, 0)
         best_selection = {'epoch': 0, 'threshold': fixed_threshold,
                           'validation': {'threshold': fixed_threshold, **initial_report['class_and_location']},
-                          'threshold_candidates': [], 'rule': config['correction_focus_policy']['selection'],
+                          'threshold_candidates': [], 'rule': config['selection'] if localization_focus else config['correction_focus_policy']['selection'],
                           'test_used': False}
         torch.save({'model': best_state, 'categories': categories, 'config': config,
                     'threshold': fixed_threshold, 'epoch': 0}, run_dir/'detector.pt')
@@ -498,8 +566,8 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
     for epoch in range(1, epochs+1):
         epoch_started = time.monotonic()
         model.train()
-        phase = ('joint' if not correction_focus or epoch > max(1, epochs*3//5)
-                 or time.monotonic()-train_started >= seconds*.65 else 'classification')
+        phase = training_phase(epoch, epochs, time.monotonic()-train_started, seconds,
+                               correction_focus, localization_focus)
         joint_epochs += phase == 'joint'
         if correction_focus:
             for name, parameter in model.named_parameters():
@@ -511,7 +579,7 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
                     module.eval()
         else:
             model.backbone.eval()
-        model.head.use_l1 = phase == 'joint' if correction_focus else epoch >= 20
+        model.head.use_l1 = True if localization_focus else phase == 'joint' if correction_focus else epoch >= 20
         roi_order = (feedback_records*2 if phase == 'joint' else []) if correction_focus else feedback_records
         order = list(splits['train']) + hard_positive_records + roi_order + focus_records
         random.shuffle(order)
@@ -526,7 +594,7 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
                     from correction_focus import crop_focus_sample
                     record, rgb = crop_focus_sample(record, rgb, rng=random)
                 partial_batch.append(bool(record.get('classification_problems_without_boxes')) or bool(record.get('crop_partial')))
-                if record.get('negative_rois') or correction_focus:
+                if record.get('negative_rois') or correction_focus or localization_focus:
                     image, target, rois = feedback_sample(record, rgb, input_size, transform.max_labels)
                 else:
                     bgr = np.ascontiguousarray(rgb[..., ::-1])
@@ -553,6 +621,10 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
         if correction_focus:
             epoch_log.update(phase=phase, focus_crop_images=len(focus_records),
                              negative_roi_extra_images=len(roi_order), l1_enabled=model.head.use_l1)
+        if localization_focus:
+            epoch_log.update(phase=phase, focus_crop_images=len(focus_records),
+                negative_roi_extra_images=len(roi_order), l1_enabled=model.head.use_l1,
+                optimizer_learning_rates={group['name']: group['lr'] for group in optimizer.param_groups})
         reached_budget = time.monotonic()-train_started >= seconds
         if epoch == 1 or epoch % 5 == 0 or epoch == epochs or reached_budget:
             model.eval()
@@ -567,8 +639,9 @@ def train(dataset_path, run_dir, epochs=50, seconds=450, batch_size=2, input_siz
                 within_budget = selected['fp'] <= 2 * selected['support']
                 key = (within_budget, selected['recall'] if within_budget else selected['f2'],
                        selected['f2'], -selected['fp'], -epoch)
-                if correction_focus:
-                    key = correction_selection_key(report, initial_report, epoch)
+                if correction_focus or localization_focus:
+                    selection_key = localization_selection_key if localization_focus else correction_selection_key
+                    key = selection_key(report, initial_report, epoch)
                     epoch_log['location_validation'] = report['location_only']
                     epoch_log['baseline_non_regression_met'] = bool(key[0])
             epoch_log['validation'] = selected
@@ -818,6 +891,7 @@ if __name__ == '__main__':
     parser.add_argument('--location-only', '--class-agnostic', dest='location_only', action='store_true', help='Train one generic issue-location class while preserving original human labels')
     parser.add_argument('--fixed-threshold', type=float, help='Keep the pre-registered threshold fixed across checkpoints and comparisons')
     parser.add_argument('--correction-focus', action='store_true', help='Retain localization while learning reviewed issue types, then gently adapt geometry with local views')
+    parser.add_argument('--localization-focus', action='store_true', help='Jointly adapt typed localization from epoch one with bounded local views and fixed validation safety')
     parser.add_argument('--compare-base', type=Path, help='Validation-only comparison after training or with --compare-only')
     parser.add_argument('--compare-only', action='store_true')
     parser.add_argument('--compare-validation-to', type=Path,
@@ -835,6 +909,6 @@ if __name__ == '__main__':
     else:
         train(args.dataset, args.run, args.epochs, args.seconds, args.batch_size, args.input_size,
               args.adapt_backbone, args.defer_test, args.initialize_from, args.location_only,
-              args.fixed_threshold, args.correction_focus)
+              args.fixed_threshold, args.correction_focus, args.localization_focus)
         if args.compare_base:
             print(json.dumps(compare_validation(args.dataset, args.run, args.compare_base), ensure_ascii=False), flush=True)
