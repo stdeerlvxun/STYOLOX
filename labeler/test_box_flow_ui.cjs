@@ -127,8 +127,8 @@ class Element{
   const firstNegative={id:'deleted-fp-1',x:.35,y:.3,w:.3,h:.3,reason:'false_positive'},secondNegative={id:'deleted-fp-2',x:.36,y:.31,w:.28,h:.28,reason:'false_positive'},unrelatedNegative={id:'keep-normal-away',x:.8,y:.75,w:.08,h:.08,reason:'normal_structure'};
   fixtureBoxes=[structuredClone(human),structuredClone(conflictingBox)];fixtureRegions=[firstNegative,secondNegative,unrelatedNegative];
   await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);const conflictWrites=writes.length,conflictNavigations=navigations;
-  await el('confirmAnnotation').fire('click');assert.match(failures.pop().message,/2 处已删除误报区域/);assert.equal(writes.length,conflictWrites,'Conflict is explained before any confirm API or implicit candidate adoption');assert.equal(navigations,conflictNavigations);
-  assert.equal(el('boxSelect').value,conflictingBox.id);assert.equal(el('boxEditorConflictActions').hidden,false);assert.match(el('boxEditorError').textContent,/已删除误报区域/);assert.equal(el('boxEditorKeepNormal').textContent,'保留误报判定');
+  await el('confirmAnnotation').fire('click');assert.match(failures.pop().message,/2 处历史删除区域/);assert.equal(writes.length,conflictWrites,'Conflict is explained before any confirm API or implicit candidate adoption');assert.equal(navigations,conflictNavigations);
+  assert.equal(el('boxSelect').value,conflictingBox.id);assert.equal(el('boxEditorConflictActions').hidden,false);assert.match(el('boxEditorError').textContent,/历史删除区域/);assert.equal(el('boxEditorKeepNormal').textContent,'保留历史记录');
   assert.ok(el('annotationOverlay').children.some(node=>node.fill==='#ffbd69'&&node['fill-opacity']===.32),'Conflicting negative regions get a visible orange fill');
   await el('boxEditorKeepProblem').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
   assert.deepEqual(writes.at(-1).boxes,fixtureBoxes);assert.deepEqual(writes.at(-1).negative_regions,[unrelatedNegative],'Keep problem removes all negatives conflicting with this one problem, preserving unrelated regions');
@@ -234,7 +234,7 @@ class Element{
   fixtureProposal={proposal_id:'reject-typed-proposal',content_fingerprint:'reject-visible-fingerprint',model_id:'typed-detector',method:'typed',status:'pending',source_sha256:'source',label_fingerprint:'old-label',boxes:[{...proposalBox,id:'rejected-typed-1',problem:'崩边'}]};
   await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);await el('rejectAutoBoxes').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
   assert.equal(writes.at(-1).status,'draft');assert.equal(writes.at(-1).expected_proposal_fingerprint,'reject-visible-fingerprint');assert.equal(writes.at(-1).boxes.length,0);assert.deepEqual(context.S.current.label,unclassifiedLabel);
-  await key('Enter');assert.equal(writes.at(-1).status,'confirmed');assert.equal(writes.at(-1).expected_proposal_fingerprint,'reject-visible-fingerprint','Reject-all uses the same visible prediction guard through the annotation confirmation endpoint');assert.equal(writes.at(-1).negative_regions.length,1);assert.equal(failures.length,0);
+  await key('Enter');assert.equal(writes.at(-1).status,'confirmed');assert.equal(writes.at(-1).expected_proposal_fingerprint,'reject-visible-fingerprint','Reject-all uses the same visible prediction guard through the annotation confirmation endpoint');assert.equal(writes.at(-1).negative_regions.length,0);assert.equal(failures.length,0);
   // Editing a typed shared issue must not require responsibility before moving, selecting, deleting or retyping.
   context.S.current.label=structuredClone(unclassifiedLabel);fixtureBoxes=[structuredClone(human)];fixtureRegions=[];fixtureProposalId=null;fixtureProposalFingerprint=null;
   const sharedCandidate={...proposalBox,id:'shared-prediction',problem:'划伤',type_provenance:{source:'detector_class_prediction',model_sha256:'a'.repeat(64),score:.7,scope:'box'},problem_source:'model_prediction'};
@@ -253,8 +253,18 @@ class Element{
   await clickPoint(.6,.475,86);await button('boxEditorProblems','残胶').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.equal(writes.at(-1).boxes.find(box=>box.id==='shared-prediction').problem,'残胶','Actual picture click opens a typed box for reclassification');
   await button('boxEditorProblems','划伤').fire('click');await el('boxEditorClose').fire('click');assert.equal(el('boxEditor').hidden,true);assert.equal(failures.length,0,'Closing an editor keeps the draft without requiring responsibility');
   await key('Enter',context.document.activeElement);assert.match(failures.pop().message,/选择责任/,'Final submission still requires responsibility');assert.equal(el('boxEditor').hidden,false);
-  await el('boxEditorDelete').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.ok(!writes.at(-1).boxes.some(box=>box.id==='shared-prediction'));assert.deepEqual(writes.at(-1).boxes[0],human);assert.equal(writes.at(-1).negative_regions[0].source_box_id,'shared-prediction');assert.equal(failures.length,0,'Deleting an incorrect prediction does not require responsibility');
+  await el('boxEditorDelete').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.ok(!writes.at(-1).boxes.some(box=>box.id==='shared-prediction'));assert.deepEqual(writes.at(-1).boxes[0],human);assert.equal(writes.at(-1).negative_regions.length,0);assert.equal(failures.length,0,'Deleting an incorrect prediction does not require responsibility or teach a normal region');
   await el('undoBox').fire('click');context.document.activeElement=priorInput;await clickPoint(.6,.475,87);await key('Delete',context.document.activeElement);await vm.runInContext('AnnotationUI.saveDraft()',context);assert.ok(!writes.at(-1).boxes.some(box=>box.id==='shared-prediction'),'Delete operates on the clicked frame after an input had focus');assert.deepEqual(context.S.current.label,unclassifiedLabel);assert.equal(failures.length,0);
+  // Explicit normal shortcuts remain available in the on-image editor without another dialog.
+  for(const [id,reason,action] of [['boxEditorProcessHole','process_hole','process_hole'],['boxEditorNormalStructure','normal_structure','normal_structure'],['boxEditorFalsePositive','false_positive','confirmed_false_positive']]){
+    await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);await clickPoint(.5,.425,90);
+    assert.equal(el('boxEditorNormalActions').hidden,false);assert.equal(el(id).disabled,false);
+    await el(id).fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
+    const body=writes.at(-1);assert.equal(body.negative_regions.length,1);assert.equal(body.negative_regions[0].reason,reason);
+    assert.deepEqual(body.negative_regions[0].normal_provenance,{source:'human_explicit_normal',action,confirmed:true});
+    assert.equal(body.negative_regions[0].source_box_id,'shared-prediction');assert.deepEqual(body.boxes[0],human);assert.equal(el('boxEditor').hidden,true);
+    await el('undoBox').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);assert.equal(writes.at(-1).negative_regions.length,0);assert.ok(el('boxSelect').children.some(box=>box.value==='suggestion:shared-prediction'),'Undo restores the untouched visible suggestion without accepting it');
+  }
   console.log('Picture pointer selection, shared-issue move/resize/retype without premature validation, canvas focus, popup move/delete actions and final-submit responsibility validation passed.');
   console.log('Typed model defaults, editable responsibility, atomic unclassified confirmation and legacy draft upgrade passed.');
   console.log('Untyped all-image boxes: explicit type and responsibility, Enter focus/error, resumable draft, empty classification prevention and human-box preservation passed.');

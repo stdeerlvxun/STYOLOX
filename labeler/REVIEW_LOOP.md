@@ -58,3 +58,11 @@
 - 新模型的实际人工通过率需上线后积累，不能用验证成绩代替。自动终判仍关闭。
 - 每20张合规确认图片触发本地静默训练。待审低于10张时补充最多50张，已经审核过的图片不会重新入队，完成批次自动归档。
 - `GET /api/training-rounds/state`读取独立持久化的训练摘要；worker经原有令牌保护的`POST /api/training-rounds/record`幂等发布，不修改人工数据库。
+
+## 纠错动作与训练含义
+
+- 删除框、移除全部机器框只记录删除；移框、改类型或删后重画记录位置/类型/可能替换关系，均不把原区域标成正常。删除后仍可直接撤销，删空后 Enter 可确认待补真问题框。
+- 图片上的编辑浮层提供“工艺孔 / 正常结构 / 其他误报”三个明确入口。只有使用这些入口并确认整图，才新增局部正常纠错区域；原有图片状态筛选规则不变。
+- 新正常区域携带 `normal_provenance={source:"human_explicit_normal",action:"process_hole"|"normal_structure"|"confirmed_false_positive",confirmed:true}`。后端校验 action 与 reason 对应，反馈导出保留该字段。
+- 新反馈事件保留原 kind/changes，并新增 `correction_semantics` 数组区分 `geometry`、`type`、`normal`、`replacement`、`ambiguous_delete`。重画关联仅按重叠推断（`replacement_inferred:true`），不能作为正常负例。
+- 不迁移或覆写历史分类、框、历史与反馈。历史 `process_hole/normal_structure` 保留明确原因兼容；没有上述 provenance 的历史 generic `false_positive` 不补造人工确认，训练端应排除其正常负例用途。

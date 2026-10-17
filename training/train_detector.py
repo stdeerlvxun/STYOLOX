@@ -287,6 +287,10 @@ def load_detector(run_dir, device='cuda'):
     detector = Detector(model, checkpoint['categories'], config['input_size'], device,
                         checkpoint['threshold'], config['nms'], config['max_predictions'])
     detector.roi_verifier = config.get('roi_verifier')
+    tiled_config = config.get('tiled_inference')
+    if isinstance(tiled_config, dict) and tiled_config.get('enabled') is True:
+        from tiled_inference import TiledDetector
+        detector = TiledDetector(detector, tiled_config)
     return detector
 
 
@@ -804,7 +808,8 @@ def compare_validation(dataset_path, run_dir, base_run):
         for record in records:
             if sha256(record['full_path']) != record['sha256']:
                 raise ValueError('Validation source changed during comparison')
-            values = detector.predict_image(record['full_path'], min(THRESHOLDS))
+            values = detector.predict_image(record['full_path'],
+                min(THRESHOLDS) if fixed_threshold is None else fixed_threshold)
             predictions[str(record['image_id'])] = [dict(v, class_id=0 if location_objective else names.get(v['problem'], -1))
                                                      for v in values]
         if fixed_threshold is None:

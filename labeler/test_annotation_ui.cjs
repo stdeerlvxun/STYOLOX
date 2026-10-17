@@ -128,7 +128,7 @@ class Element{
   assert.equal(writes.length,beforeReject,'Rejecting a suggestion must not immediately change human annotations');
   await vm.runInContext('AnnotationUI.saveDraft()',context);
   assert.deepEqual(writes.at(-1).boxes,documentBoxes,'Rejecting all model candidates must preserve human boxes');
-  assert.equal(writes.at(-1).negative_regions.length,1);assert.equal(writes.at(-1).negative_regions[0].reason,'false_positive');
+  assert.equal(writes.at(-1).negative_regions.length,0,'Removing all candidates must not teach normal regions');
   assert.deepEqual(context.S.current.label,label);assert.equal(el('adoptAutoBoxes').disabled,true);
   proposal.label_fingerprint='stale-label';
   await vm.runInContext('AnnotationUI.loadForImage(S.current)',context);
@@ -150,13 +150,15 @@ class Element{
   const holeDraft=structuredClone(writes.at(-1));
   assert.equal(holeDraft.boxes.length,0);assert.equal(holeDraft.negative_regions[0].reason,'process_hole');
   assert.equal(holeDraft.negative_regions[0].source_box_id,'machine-box');assert.equal(holeDraft.outcome,'needs_correction');
+  assert.deepEqual(holeDraft.negative_regions[0].normal_provenance,{source:'human_explicit_normal',action:'process_hole',confirmed:true});
   assert.equal(holeDraft.proposal_id,'proposal-1');assert.equal(el('boxSelect').children.length,1,'Deleting the last machine candidate must not resurrect its preview');
   assert.ok(el('annotationOverlay').children.some(node=>node.textContent==='工艺孔 · 非破损'));
   await el('undoBox').fire('click');await vm.runInContext('AnnotationUI.saveDraft()',context);
   assert.equal(writes.at(-1).boxes.length,1);assert.equal(writes.at(-1).negative_regions.length,0,'Undo must restore both positive and negative regions');
   for(const handler of keys)handler({target:body,key:'Delete',ctrlKey:false,preventDefault(){},stopImmediatePropagation(){}});
   await vm.runInContext('AnnotationUI.saveDraft()',context);
-  assert.equal(writes.at(-1).boxes.length,0);assert.equal(writes.at(-1).negative_regions[0].reason,'false_positive');
+  assert.equal(writes.at(-1).boxes.length,0);assert.equal(writes.at(-1).negative_regions.length,0,'Ordinary Delete is ambiguous, not a normal observation');
+  assert.equal(writes.at(-1).outcome,'needs_correction');
   await el('undoBox').fire('click');await el('processHoleBox').fire('click');
   for(const handler of keys)handler({target:body,key:'Enter',ctrlKey:false,preventDefault(){},stopImmediatePropagation(){}});
   await new Promise(resolve=>setImmediate(resolve));

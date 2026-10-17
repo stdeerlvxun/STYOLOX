@@ -41,6 +41,22 @@ python train_detector.py --dataset ./runs/example/dataset.json --run ./runs/exam
 
 ## 人工纠错与局部正常区域辅助训练
 
+普通删除、移框、改类型和删除后重画均不证明该区域正常。局部负监督只接受明确的
+`normal_provenance={source: human_explicit_normal, action: process_hole|normal_structure|confirmed_false_positive, confirmed: true}`，
+并检查 action 与 reason 一致。兼容旧版明确的 `process_hole` / `normal_structure`；
+没有来源证明的旧 `false_positive` 排除，不删除历史记录，也不影响同图合规人工正框。
+每20张训练触发统计沿用相同语义。图片状态、草稿、源文件及留出隔离规则保持不变。
+
+`annotation_audit.py --dataset dataset.json --out audit` 只读问题标签和框标签对应关系，
+训练差异清单与验证/测试元数据分开，不读取像素，不自动修改标签或将已审核图片放回队列。
+
+可选 `config.tiled_inference.enabled=true` 在旧 YOLOX 外增加整图和重叠分块预测；默认关闭。
+整图必跑，最大工作边1920，分块640、重叠25%、至多16块，同类IoU 0.5去重，最多10个最终框，
+保留原图候选优先级。坐标映射至 EXIF 转正的原图，不降低原阈值、不修改分数。
+没有可靠文字/水印掩膜时记录 `not_applied`，不遮盖图像或硬删候选。
+固定同一验证图、同一阈值比较旧整图/旧分块/新整图/新分块，找回、漏检、未匹配候选分开报告；
+未通过原有验证门槛时，分块配置和候选权重均不得接入正式补框。
+
 `prepare_detector.py --feedback-json feedback-export.json` 可读取分类工具 `/api/annotation-feedback/export`。程序仍以同一 SQLite 快照的原分类和 NAS 源文件为准，重验问题点、图片状态、分类草稿、原始分类 JSON 指纹、源 SHA 和 EXIF 后尺寸；导出中的布尔标记不代替本地核验。人工确认的正框仍由正常流程进入 `records`。
 
 已确认的工艺孔、正常结构等局部误报单独放在 `negative_feedback_records`，不生成整图正常标签，也不伪造正框。其区域内的非正 anchor 恢复负 objectness 监督；未框选的其余区域保持忽略，正 anchor 的损失不被正常区域覆盖。辅助样本每轮出现 1 次，局部负样本采用均值并将经过 YOLOX 前景数归一化后的总辅助权重限制为 0.25，避免 ROI 面积、anchor 数量扩大损失。完整标注图既有背景监督不重加权。水平翻转和 resize 同步作用于图像及区域。与人工正框重叠的正常反馈排除。工艺孔形状本身不作为几何过滤条件，孔边真实崩缺仍可预测。

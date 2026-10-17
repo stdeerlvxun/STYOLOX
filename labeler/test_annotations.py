@@ -5,7 +5,7 @@ import unittest
 from unittest.mock import patch
 from PIL import Image
 from app import Store,RESPONSIBILITY_RULES
-from annotations import responsibility_links
+from annotations import responsibility_links, clean_negative_regions, correction_events
 from deployment.snapshot import digest,annotation_digest
 import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent/'deployment'))
@@ -153,6 +153,45 @@ class LocalizationTest(unittest.TestCase):
             with self.assertRaises(ValueError):self.store.annotations.save(self.id,body)
         self.assertEqual(self.store.annotations.feedback_export()['items'],[])
         self.assertEqual(self.store.query('SELECT * FROM annotation_documents'),[])
+
+    def test_explicit_normal_provenance_roundtrips_and_legacy_data_is_not_upgraded(self):
+        before=self.human();region={**self.negative(),'reason':'false_positive',
+            'normal_provenance':{'source':'human_explicit_normal','action':'confirmed_false_positive','confirmed':True}}
+        body=self.payload();body['negative_regions']=[region]
+        result=self.store.annotations.save(self.id,body)
+        self.assertEqual(result['document']['negative_regions'],[region])
+        self.assertEqual(self.store.annotations.feedback_export()['items'][0]['feedback']['negative_regions'],[region])
+        old_history=self.store.query('SELECT * FROM annotation_history ORDER BY id')
+        legacy={**self.negative(),'reason':'false_positive'}
+        self.assertNotIn('normal_provenance',clean_negative_regions([legacy])[0])
+        self.store.annotations.detail(self.id);self.store.annotations.feedback_export()
+        self.assertEqual(self.store.query('SELECT * FROM annotation_history ORDER BY id'),old_history)
+        self.assertEqual(self.human(),before)
+        for invalid in [None,{}, {'source':'model','action':'confirmed_false_positive','confirmed':True},
+            {'source':'human_explicit_normal','action':'process_hole','confirmed':True},
+            {'source':'human_explicit_normal','action':'confirmed_false_positive','confirmed':1}]:
+            with self.assertRaisesRegex(ValueError,'人工明确确认'):clean_negative_regions([{**region,'normal_provenance':invalid}])
+
+    def test_correction_events_separate_geometry_type_normal_replacement_and_ambiguous_delete(self):
+        old={'id':'machine','problem':'崩边','x':.1,'y':.2,'w':.3,'h':.4}
+        proposal={'boxes':[old]}
+        moved={**old,'x':.2};typed={**old,'problem':'划伤'}
+        self.assertEqual(correction_events(proposal,[moved],[])[0]['correction_semantics'],['geometry'])
+        self.assertEqual(correction_events(proposal,[typed],[])[0]['correction_semantics'],['type'])
+        self.assertEqual(correction_events(proposal,[],[])[0]['correction_semantics'],['ambiguous_delete'])
+        legacy={**old,'id':'roi','reason':'false_positive','source_box_id':'machine'}
+        self.assertEqual(correction_events(proposal,[],[legacy])[0]['correction_semantics'],['ambiguous_delete'])
+        self.assertIsNone(correction_events(proposal,[],[legacy])[0]['normal_confirmation'])
+        named={**legacy,'reason':'process_hole'}
+        self.assertEqual(correction_events(proposal,[],[named])[0]['normal_confirmation'],'legacy_named_reason')
+        explicit={**legacy,'normal_provenance':{'source':'human_explicit_normal','action':'confirmed_false_positive','confirmed':True}}
+        normal=correction_events(proposal,[],[explicit])[0]
+        self.assertEqual(normal['correction_semantics'],['normal']);self.assertEqual(normal['normal_confirmation'],'explicit_ui_action')
+        replacement={**old,'id':'manual-redraw','problem':'划伤','x':.12}
+        events=correction_events(proposal,[replacement],[])
+        self.assertEqual(events[0]['correction_semantics'],['replacement'])
+        self.assertEqual(events[0]['replacement_box_ids'],['manual-redraw'])
+        self.assertTrue(events[0]['replacement_inferred']);self.assertIsNone(events[0]['normal_confirmation'])
 
     def test_human_feedback_import_helper_preserves_frames_and_original_classification(self):
         from deployment.import_annotation_feedback import install

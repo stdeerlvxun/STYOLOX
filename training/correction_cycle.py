@@ -95,6 +95,8 @@ def export_feedback(config):
 
 
 def valid_region(region):
+    if not isinstance(region, dict):
+        return False
     values = [region.get(key) for key in ('x', 'y', 'w', 'h')]
     if any(type(v) not in (int, float) or not math.isfinite(v) for v in values):
         return False
@@ -105,6 +107,8 @@ def valid_region(region):
 
 def eligible_pending(payload):
     """Count images, not button presses; keep the existing image-state policy."""
+    from roi_feedback import normal_region_exclusion
+
     result = []
     for item in payload['items']:
         feedback = item.get('feedback') or {}
@@ -124,7 +128,8 @@ def eligible_pending(payload):
         positive = (annotation.get('status')=='confirmed' and annotation.get('outcome')=='boxed'
                     and bool(annotation.get('boxes'))
                     and annotation.get('label_fingerprint')==feedback.get('label_fingerprint'))
-        negative = any(valid_region(region) for region in feedback.get('negative_regions', []))
+        negative = any(valid_region(region) and not normal_region_exclusion(region)
+                       for region in feedback.get('negative_regions', []))
         if positive or negative:
             result.append(item)
     return sorted(result, key=lambda row: row['feedback_id'])

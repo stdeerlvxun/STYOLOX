@@ -57,6 +57,13 @@ def clean_negative_regions(regions):
         if source_id is not None:
             if not isinstance(source_id,str) or not source_id or len(source_id)>80:raise ValueError('原建议框标识不正确')
             item['source_box_id']=source_id
+        if 'normal_provenance' in region:
+            provenance=region['normal_provenance']
+            action={'process_hole':'process_hole','normal_structure':'normal_structure','false_positive':'confirmed_false_positive'}[reason]
+            if (not isinstance(provenance,dict) or provenance.get('source')!='human_explicit_normal'
+                or provenance.get('action')!=action or provenance.get('confirmed') is not True):
+                raise ValueError('正常区域必须由人工明确确认，纠错原因与确认操作需一致')
+            item['normal_provenance']={'source':'human_explicit_normal','action':action,'confirmed':True}
         result.append(item);identities.add(identity)
     return result
 
@@ -70,6 +77,13 @@ def reject_conflicting_regions(boxes, regions):
                 raise ValueError('问题框与正常结构纠错区域明显重叠，请调整后确认')
 
 
+def normal_confirmation(region):
+    """Never upgrade an old generic delete into an explicit normal observation."""
+    if region.get('normal_provenance',{}).get('source')=='human_explicit_normal':return 'explicit_ui_action'
+    if region.get('reason') in ('process_hole','normal_structure'):return 'legacy_named_reason'
+    return None
+
+
 def correction_events(proposal, boxes, regions):
     original={box['id']:box for box in proposal.get('boxes',[])}
     final={box.get('source_box_id',box['id']):box for box in boxes};negative={r.get('source_box_id'):r for r in regions}
@@ -77,15 +91,31 @@ def correction_events(proposal, boxes, regions):
     for identity,box in original.items():
         current=final.get(identity)
         if current is None:
+            region=negative.get(identity,{})
+            confirmed_normal=normal_confirmation(region)
+            # An overlap only links a possible replacement; it never creates a negative ROI.
+            replacements=[]
+            if not confirmed_normal:
+                for other_id,other in final.items():
+                    if other_id in original:continue
+                    width=max(0,min(box['x']+box['w'],other['x']+other['w'])-max(box['x'],other['x']))
+                    height=max(0,min(box['y']+box['h'],other['y']+other['h'])-max(box['y'],other['y']))
+                    if width*height/min(box['w']*box['h'],other['w']*other['h'])>=.3:replacements.append(other['id'])
             result.append({'kind':'deleted','source_box_id':identity,'before':box,
-                           'reason':negative.get(identity,{}).get('reason','not_confirmed_as_defect')})
+                'reason':region.get('reason','not_confirmed_as_defect'),
+                'correction_semantics':['normal' if confirmed_normal else 'replacement' if replacements else 'ambiguous_delete'],
+                'normal_confirmation':confirmed_normal,
+                **({'normal_provenance':region['normal_provenance']} if 'normal_provenance' in region else {}),
+                **({'replacement_box_ids':replacements,'replacement_inferred':True} if replacements else {})})
             continue
         changes=[]
         if current['problem']!=box['problem']:changes.append('reclassified' if box['problem'] else 'assigned_problem')
         if any(abs(current[k]-box[k])>1e-6 for k in ('x','y','w','h')):changes.append('moved')
         result.append({'kind':'corrected' if changes else 'accepted','source_box_id':identity,
-                       'changes':changes,'before':box,'after':current})
-    result.extend({'kind':'added','after':box} for identity,box in final.items() if identity not in original)
+            'changes':changes,'correction_semantics':(['geometry'] if 'moved' in changes else [])+
+                (['type'] if any(c in changes for c in ('reclassified','assigned_problem')) else []),
+            'before':box,'after':current})
+    result.extend({'kind':'added','correction_semantics':['positive_addition'],'after':box} for identity,box in final.items() if identity not in original)
     return result
 
 
@@ -660,7 +690,10 @@ class Annotations:
                 'coordinate_space':'exif_transposed_normalized_xywh','annotation_version_at_confirmation':version,
                 'label_fingerprint':label_hash,'negative_regions':regions,'whole_image_normal':False,
                 'proposal_id':body.get('proposal_id'),'model_id':body.get('model_id'),
-                'events':[{'kind':'false_positive','source_box_id':r.get('source_box_id'),'reason':r['reason']} for r in regions]}
+                'events':[{'kind':'false_positive','source_box_id':r.get('source_box_id'),'reason':r['reason'],
+                    'correction_semantics':['normal' if normal_confirmation(r) else 'ambiguous_delete'],
+                    'normal_confirmation':normal_confirmation(r),
+                    **({'normal_provenance':r['normal_provenance']} if 'normal_provenance' in r else {})} for r in regions]}
             identity=self._record_feedback(image_id,feedback,dt.datetime.now(dt.timezone.utc).isoformat())
         return {'saved':True,'feedback_id':identity,'labels_unchanged':True,'annotations_unchanged':True}
 

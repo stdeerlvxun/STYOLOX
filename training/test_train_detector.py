@@ -3,12 +3,12 @@ import json
 from pathlib import Path
 import tempfile
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 import torch
 
 from train_detector import (adaptable_parameter, compare_validation, evaluate_predictions,
     localization_optimizer_groups, localization_parameter_group, localization_selection_key,
-    location_training_records, match_boxes, partial_objectness_loss, select_threshold,
+    load_detector, location_training_records, match_boxes, partial_objectness_loss, select_threshold,
     training_phase, validate_training_modes, xyxy_iou)
 
 
@@ -74,6 +74,32 @@ class LocalizationFocusTests(unittest.TestCase):
                            localization_selection_key(better_location, baseline, 1))
 
 
+class DetectorLoadTests(unittest.TestCase):
+    def test_tiling_only_wraps_explicitly_enabled_checkpoint(self):
+        from tiled_inference import TiledDetector
+        for tiled in (None, {'enabled': False}, {'enabled': 'true'}, {'enabled': True}):
+            with self.subTest(tiled=tiled):
+                config = {'input_size': 640, 'nms': .5, 'max_predictions': 10,
+                          'roi_verifier': {'schema': 'preserved'}}
+                if tiled is not None:
+                    config['tiled_inference'] = tiled
+                checkpoint = {'config': config, 'categories': [{'id': 0, 'name': '崩边'}],
+                              'model': {'unchanged': 'state'}, 'threshold': .05}
+                model, original = Mock(), SimpleNamespace(threshold=.05)
+                with patch('train_detector.torch.load', return_value=checkpoint), \
+                     patch('train_detector.make_model', return_value=model), \
+                     patch('train_detector.Detector', return_value=original):
+                    loaded = load_detector('unused', device='cpu')
+                model.load_state_dict.assert_called_once_with({'unchanged': 'state'})
+                if tiled == {'enabled': True}:
+                    self.assertIsInstance(loaded, TiledDetector)
+                    self.assertIs(loaded.detector, original)
+                    self.assertEqual(loaded.threshold, .05)
+                    self.assertEqual(loaded.roi_verifier, {'schema': 'preserved'})
+                else:
+                    self.assertIs(loaded, original)
+
+
 class DetectorMetricsTests(unittest.TestCase):
     def test_binary_candidate_comparison_scores_both_models_as_locations(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -83,10 +109,12 @@ class DetectorMetricsTests(unittest.TestCase):
                 {'image_id': 1, 'relative_path': 'image', 'full_path': 'image', 'group': 'g',
                  'sha256': 'hash', 'split': 'validation', 'boxes': [
                     {'class_id': 3, 'problem': '崩边', 'xyxy': [0, 0, 10, 10]}]}]}), encoding='utf-8')
+            thresholds = []
             def fake_detector(problem):
                 return SimpleNamespace(model=SimpleNamespace(cpu=lambda: None),
-                    predict_image=lambda *args: [{'class_id': 0, 'problem': problem,
-                        'xyxy': [0, 0, 10, 10], 'score': .1}])
+                    predict_image=lambda image, threshold: thresholds.append(threshold) or
+                        [{'class_id': 0, 'problem': problem,
+                          'xyxy': [0, 0, 10, 10], 'score': .1}])
             with patch('train_detector.torch.load', return_value={'config': {'class_agnostic': True, 'fixed_threshold': .05}}), \
                  patch('train_detector.load_detector', side_effect=[fake_detector('崩边'), fake_detector('问题位置')]), \
                  patch('train_detector.sha256', return_value='hash'):
@@ -97,6 +125,27 @@ class DetectorMetricsTests(unittest.TestCase):
             self.assertEqual(result['candidate']['selection']['threshold'], .05)
             self.assertIsNone(result['strict_issue_type_metrics'])
             self.assertFalse(result['test_used'])
+            self.assertEqual(thresholds, [.05, .05])
+
+    def test_comparison_without_fixed_threshold_keeps_grid_floor(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            dataset = root/'data.json'
+            dataset.write_text(json.dumps({'categories': [{'id': 0, 'name': '崩边'}], 'records': [
+                {'image_id': 1, 'relative_path': 'image', 'full_path': 'image', 'group': 'g',
+                 'sha256': 'hash', 'split': 'val', 'boxes': [
+                    {'class_id': 0, 'problem': '崩边', 'xyxy': [0, 0, 10, 10]}]}]}), encoding='utf-8')
+            thresholds = []
+            def fake_detector(*args):
+                return SimpleNamespace(model=SimpleNamespace(cpu=lambda: None),
+                    predict_image=lambda image, threshold: thresholds.append(threshold) or
+                        [{'class_id': 0, 'problem': '崩边', 'xyxy': [0, 0, 10, 10], 'score': .1}])
+            with patch('train_detector.torch.load', return_value={'config': {}}), \
+                 patch('train_detector.load_detector', side_effect=fake_detector), \
+                 patch('train_detector.sha256', return_value='hash'):
+                result = compare_validation(dataset, root, root)
+            self.assertEqual(thresholds, [.01, .01])
+            self.assertIsNone(result['fixed_threshold_for_both'])
 
     def test_location_only_training_view_preserves_original_human_classes(self):
         box = {'class_id': 3, 'problem': '崩边', 'xyxy': [1, 2, 3, 4]}

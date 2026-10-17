@@ -58,7 +58,7 @@
   }
   function conflictingRegions(box){return box?A.negativeRegions.filter(region=>overlapRatio(box,region)>=.5):[];}
   function firstConflict(boxes=displayBoxes()){for(const box of boxes){const regions=conflictingRegions(box);if(regions.length)return {box,regions};}return null;}
-  function regionName(region){return region.reason==='process_hole'?'工艺孔':region.reason==='normal_structure'?'正常结构':'已删除误报区域';}
+  function regionName(region){return region.reason==='process_hole'?'工艺孔':region.reason==='normal_structure'?'正常结构':region.normal_provenance?.source==='human_explicit_normal'?'人工确认误报':'历史删除区域';}
   function conflictMessage(box,regions){return '“'+(box.problem||'待选问题点')+'”与 '+regions.length+' 处'+[...new Set(regions.map(regionName))].join(' / ')+'重叠，请选择保留一项。';}
   function showConflict(conflict){
     if(!conflict)return;const {box,regions}=conflict;A.active=true;A.quickFlow=true;A.draw=false;A.selected=box.id;
@@ -107,6 +107,8 @@
     const automatic=S.rules?.[box.problem],roles=standardResponsibilities(box.problem,box),conflicts=conflictingRegions(box);
     if(el('boxEditorTitle'))el('boxEditorTitle').textContent=box.suggestion?'纠正机器框':'标注问题位置';
     for(const id of ['boxEditorMove','boxEditorDelete'])if(el(id))el(id).disabled=S.busy||!ready();
+    if(el('boxEditorNormalActions'))el('boxEditorNormalActions').hidden=box.origin!=='model';
+    for(const id of ['boxEditorProcessHole','boxEditorNormalStructure','boxEditorFalsePositive'])if(el(id))el(id).disabled=S.busy||!ready()||box.origin!=='model';
     el('boxEditorProblems').replaceChildren();
     for(const name of problemOrder()){const button=document.createElement('button');button.type='button';button.textContent=name;button.setAttribute('aria-pressed',String(name===box.problem));button.classList.toggle('existing-problem',(S.current?.label?.defects||[]).includes(name));button.addEventListener('click',()=>{if(name===box.problem)return;editPopup(current=>{
       current.problem=name;delete current.responsibility_override;Object.assign(current,responsibilityFields(name));A.lastProblem=name;
@@ -119,7 +121,7 @@
     if(el('boxEditorError')){const message=conflicts.length?conflictMessage(box,conflicts):A.popup?.error||'';el('boxEditorError').textContent=message;el('boxEditorError').hidden=!message;}
     if(el('boxEditorConflictActions'))el('boxEditorConflictActions').hidden=!conflicts.length;
     if(el('boxEditorKeepProblem')){el('boxEditorKeepProblem').disabled=S.busy;el('boxEditorKeepProblem').title='保留这个问题框，撤销它重叠的 '+conflicts.length+' 处记录区域；其他框与分类保留，可撤销';}
-    if(el('boxEditorKeepNormal')){el('boxEditorKeepNormal').disabled=S.busy;el('boxEditorKeepNormal').title='保留这些记录区域，仅移除这个问题框；其他框与分类保留，可撤销';el('boxEditorKeepNormal').textContent=conflicts.every(region=>region.reason==='false_positive')?'保留误报判定':'保留正常区域';}
+    if(el('boxEditorKeepNormal')){el('boxEditorKeepNormal').disabled=S.busy;el('boxEditorKeepNormal').title='保留这些记录区域，仅移除这个问题框；其他框与分类保留，可撤销';el('boxEditorKeepNormal').textContent=conflicts.every(region=>region.reason==='false_positive'&&!region.normal_provenance)?'保留历史记录':conflicts.every(region=>region.reason==='false_positive')?'保留误报判定':'保留正常区域';}
     el('boxEditorResponsibilities').replaceChildren();
     const available=[...new Set([...(S.tags.responsibility||[]),'待核'])],priority=['运输','安装','其他','待核'],later=['生产','原材料'];
     const roleOrder=[...priority.filter(name=>available.includes(name)),...available.filter(name=>!priority.includes(name)&&!later.includes(name)),...available.filter(name=>later.includes(name))];
@@ -173,7 +175,7 @@
     if(A.drag?.kind==='draw')boxes.push({...A.drag.box,id:'preview',problem:el('boxProblem').value});
     for(const region of A.negativeRegions){const x=rect.x+region.x*rect.width,y=rect.y+region.y*rect.height,conflict=displayBoxes().some(box=>overlapRatio(box,region)>=.5);
       svg.append(svgNode('rect',{x,y,width:region.w*rect.width,height:region.h*rect.height,fill:conflict?'#ffbd69':'none','fill-opacity':conflict?.32:0,stroke:'#ffbd69','stroke-width':conflict?4:2,'stroke-dasharray':conflict?'8 4':'2 5','vector-effect':'non-scaling-stroke'}));
-      overlayLabel(svg,x,y,(conflict?'冲突 · ':'')+(region.reason==='process_hole'?'工艺孔 · 非破损':region.reason==='normal_structure'?'正常结构 · 非破损':'已删除误报区域'));}
+      overlayLabel(svg,x,y,(conflict?'冲突 · ':'')+regionName(region)+(region.reason==='process_hole'||region.reason==='normal_structure'?' · 非破损':''));}
     for(const [index,box] of boxes.entries()){
       const x=rect.x+box.x*rect.width,y=rect.y+box.y*rect.height,selected=box.id===A.selected||box.id==='preview';
       const color=selected?'#ff453a':box.suggestion?'#d58aff':'#00e6a0';
@@ -207,6 +209,7 @@
     el('editBoxDetails').disabled=blocked||!A.selected;
     const machineSelected=selectedBox()?.origin==='model';
     el('processHoleBox').disabled=blocked||!machineSelected;el('normalStructureBox').disabled=blocked||!machineSelected;
+    if(el('confirmFalsePositiveBox'))el('confirmFalsePositiveBox').disabled=blocked||!machineSelected;
     el('reloadAnnotation').disabled=A.loading||A.saving>0||S.busy;
     el('drawBox').setAttribute('aria-pressed',String(A.draw));el('drawBox').textContent=A.draw?'框选中 · 拖动原图':'开始框选';
     el('autoBoxProposal').hidden=!A.proposal;
@@ -217,7 +220,7 @@
     el('autoBoxSummary').textContent=!A.proposal?'':!current?'建议对应的原图或分类已变化，请重新生成建议。':A.documentStatus==='confirmed'&&adopted?'这批建议已完成人工审核。':adopted?'修改已加入草稿；Enter 确认并下一张，确认前不进入训练。':A.proposal.status==='accepted'?'这批建议已完成人工位置确认。':A.proposal.status==='rejected'?'这批机器建议已拒绝，人工分类和补标保留。':'机器建议 · '+A.proposal.boxes.length+' 框；'+(A.proposal.boxes.some(box=>!box.problem)?'点击待选框选择问题与责任，再按 Enter 确认。':'直接点击、拖动或改类，Enter 确认。');
     el('annotationStatus').textContent=A.error||A.readOnly?'读取有冲突，原补标保留':A.saveError?'保存未成功，可修改后重试':A.loading?'正在读取补标…':A.saving?'正在保存补标…':A.dirty?'改动待暂存':A.documentStatus==='confirmed'?'人工已确认 · v'+A.version:A.version?'草稿已暂存 · 尚未确认':'尚未保存位置补标';
     el('annotationFeedbackStatus').textContent=Number.isFinite(A.feedback?.confirmed_corrections)?A.feedback.confirmed_corrections+' 份纠错已确认 · 用于批次训练':'纠错在确认后纳入后续批次训练';
-    el('annotationStatus').title=A.negativeRegions.length?'已记录 '+A.negativeRegions.length+' 处局部误报；不改变整图分类。':'';
+    el('annotationStatus').title=A.negativeRegions.length?'已记录 '+A.negativeRegions.length+' 处局部纠错；仅明确确认的正常区域用于负例训练，不改变整图分类。':'';
     const label=S.current?.label,review=A.review;
     let text='当前标签：'+(label?.defects.join('、')||label?.image_state||'尚未分类')+'。补标单独保存。';
     const stateNames={normal:'无可见破损',related:'板件相关图',unrelated:'无关图',retain:'保留人工分类'};
@@ -294,20 +297,26 @@
   el('boxEditorDelete')?.addEventListener('click',()=>{if(!ready()||S.busy)return;closePopup();removeSelected();stage.focus?.({preventScroll:true});});
   el('boxSelect').addEventListener('change',()=>{A.selected=el('boxSelect').value;A.draw=false;const box=selectedBox();if(box)el('boxProblem').value=box.problem;render();});
   function markNegative(box,reason){
-    A.negativeRegions.push({id:clientId(),x:box.x,y:box.y,w:box.w,h:box.h,reason,...(box.source_box_id||box.origin==='model'?{source_box_id:box.source_box_id||box.id}:{})});
+    const action=reason==='false_positive'?'confirmed_false_positive':reason;
+    A.negativeRegions.push({id:clientId(),x:box.x,y:box.y,w:box.w,h:box.h,reason,
+      normal_provenance:{source:'human_explicit_normal',action,confirmed:true},
+      ...(box.source_box_id||box.origin==='model'?{source_box_id:box.source_box_id||box.id}:{})});
   }
-  function removeSelected(reason='false_positive'){
-    const target=selectedBox();if(!target)return;let duplicate=false;
+  function removeSelected(reason=null){
+    const target=selectedBox();if(!target)return;
     const changed=change(()=>{const box=A.boxes.find(b=>b.id===A.selected);if(!box)return;
-      duplicate=reason==='false_positive'&&box.origin==='model'&&A.boxes.some(other=>other.id!==box.id&&overlapRatio(box,other)>=.5);
-      if(box.origin==='model'&&!duplicate)markNegative(box,reason);
+      if(box.origin==='model'&&reason)markNegative(box,reason);
       A.boxes=A.boxes.filter(b=>b.id!==A.selected);A.selected='';
-      if(!A.boxes.length&&A.negativeRegions.length)A.outcome='needs_correction';},true,target.suggestion?suggestionBoxes().filter(box=>box.id!==target.id):null);
-    if(changed&&duplicate)toast('已移除重复机器框，保留问题区域');
+      if(!A.boxes.length&&(A.proposalId||A.negativeRegions.length))A.outcome='needs_correction';},true,target.suggestion?suggestionBoxes().filter(box=>box.id!==target.id):null);
+    if(changed)toast(reason?'已明确标记这处非问题，Enter 确认后用于纠错训练；可撤销':'已删除此框，可撤销；删除不会将这处当成正常样本');
   }
   el('deleteBox').addEventListener('click',()=>removeSelected());
   el('processHoleBox').addEventListener('click',()=>{if(selectedBox()?.origin==='model')removeSelected('process_hole');});
   el('normalStructureBox').addEventListener('click',()=>{if(selectedBox()?.origin==='model')removeSelected('normal_structure');});
+  el('confirmFalsePositiveBox')?.addEventListener('click',()=>{if(selectedBox()?.origin==='model')removeSelected('false_positive');});
+  for(const [id,reason] of [['boxEditorProcessHole','process_hole'],['boxEditorNormalStructure','normal_structure'],['boxEditorFalsePositive','false_positive']])el(id)?.addEventListener('click',()=>{
+    if(!ready()||S.busy||selectedBox()?.origin!=='model')return;closePopup();removeSelected(reason);stage.focus?.({preventScroll:true});
+  });
   function relabelSelected(){const chosen=el('boxProblem').value,selected=selectedBox();if(!selected||selected.problem===chosen)return;
     change(()=>{const box=A.boxes.find(b=>b.id===A.selected);if(box){box.problem=chosen;delete box.responsibility_override;Object.assign(box,responsibilityFields(chosen));A.lastProblem=chosen;}},true);
     if(!S.rules?.[chosen]){const rect=stage.getBoundingClientRect();openPopup(selectedBox(),rect.left+20,rect.top+20);}}
@@ -322,9 +331,9 @@
   el('rejectAutoBoxes').addEventListener('click',()=>{
     if(!ready()||S.busy||!proposalCurrent()||A.proposal.status!=='pending')return;
     change(()=>{const removed=A.boxes.filter(box=>box.origin==='model'&&box.proposal_id===A.proposalId);
-      const kept=A.boxes.filter(box=>!removed.includes(box));for(const box of removed)if(!kept.some(other=>overlapRatio(box,other)>=.5))markNegative(box,'false_positive');A.boxes=kept;
-      A.selected='';if(!A.boxes.length&&A.negativeRegions.length)A.outcome='needs_correction';},true,[]);
-    toast('已移除本批机器框，已有人工框保留；可撤销，按 Enter 确认纠错');
+      A.boxes=A.boxes.filter(box=>!removed.includes(box));
+      A.selected='';if(!A.boxes.length)A.outcome='needs_correction';},true,[]);
+    toast('已移除本批机器框，人工框保留；可撤销，Enter 确认。移除不会生成正常训练样本');
   });
   el('reviewOutcome').addEventListener('change',()=>{const value=el('reviewOutcome').value;change(()=>{A.outcome=value;});});
   el('confirmAnnotation').addEventListener('click',()=>confirm().catch(fail));

@@ -180,6 +180,7 @@
 .workspace-v2 .box-editor-heading{min-height:27px;padding-bottom:7px;border-bottom:1px solid #d9e0e8}
 .workspace-v2 .box-editor-heading h3{margin:0;font-size:15px;color:#182a44}
 .box-editor-heading-actions{display:flex;align-items:center;gap:8px}.box-editor-heading-actions .text-button{min-height:28px;padding:2px 4px;font-size:12px;white-space:nowrap}.box-editor-heading-actions #boxEditorDelete{color:#9c241a}
+.box-editor-normal-actions{display:flex;align-items:center;gap:6px;min-height:30px;color:#33445c;font-size:12px}.box-editor-normal-actions>span{white-space:nowrap}.box-editor-normal-actions button{height:28px;min-height:28px;padding:3px 8px;font-size:12px;white-space:nowrap;background:#f3f6fb;border-color:#bac8da;color:#25354b}.box-editor-normal-actions button:hover:not(:disabled){background:#e7effc;border-color:#7794c0}.box-editor-normal-actions button:focus-visible{outline:2px solid #245bd6;outline-offset:2px}
 .box-editor-columns{display:grid;grid-template-columns:minmax(0,1.65fr) minmax(0,1fr);gap:14px;min-height:0}
 .box-editor-columns>section{min-width:0}
 .box-editor-columns h3{display:flex;align-items:center;gap:7px;margin:0 0 8px;font-size:14px}

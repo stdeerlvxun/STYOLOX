@@ -10,11 +10,38 @@ import torch
 from PIL import Image
 
 from roi_feedback import (anchor_centers, feedback_policy, heldout_overlap, prepare_feedback,
-                          region_objectness_loss, snapshot_annotation_exclusion, transform_rois)
+                          correction_event_semantics, normal_region_exclusion, region_objectness_loss,
+                          snapshot_annotation_exclusion, transform_rois)
 from train_detector import transferred_state
 
 
 class NormalRegionFeedbackTests(unittest.TestCase):
+    def test_geometry_type_and_replacement_audited_separately_from_normals(self):
+        self.assertEqual(correction_event_semantics({'kind': 'corrected',
+            'changes': ['moved', 'resized', 'reclassified']}), ['geometry', 'type'])
+        self.assertEqual(correction_event_semantics({'kind': 'deleted', 'reason': 'false_positive'}),
+            ['ambiguous_delete'])
+        self.assertEqual(correction_event_semantics({'kind': 'added'}), ['positive_addition'])
+        self.assertEqual(correction_event_semantics({'correction_semantics': ['replacement', 'geometry']}),
+            ['geometry', 'replacement'])
+
+    def test_normal_roi_requires_explicit_action_not_ordinary_box_edit(self):
+        self.assertEqual(normal_region_exclusion({'reason': 'false_positive'}),
+            'legacy_false_positive_without_explicit_normal_confirmation')
+        for reason in ('moved', 'reclassified', 'deleted', None):
+            self.assertEqual(normal_region_exclusion({'reason': reason}),
+                'normal_region_not_explicitly_confirmed')
+        for reason in ('process_hole', 'normal_structure'):
+            self.assertEqual(normal_region_exclusion({'reason': reason}), '')
+        provenance = {'source': 'human_explicit_normal', 'action': 'confirmed_false_positive',
+                      'confirmed': True}
+        self.assertEqual(normal_region_exclusion({'reason': 'false_positive',
+            'normal_provenance': provenance}), '')
+        for invalid in ({**provenance, 'confirmed': 1}, {**provenance, 'confirmed': False},
+                        {**provenance, 'action': 'process_hole'}, {}, 'human'):
+            self.assertEqual(normal_region_exclusion({'reason': 'false_positive',
+                'normal_provenance': invalid}), 'invalid_explicit_normal_provenance')
+
     def test_unknown_pixels_ignored_normal_roi_restored_and_positive_wins(self):
         centers = torch.tensor([[1., 1.], [2., 2.], [8., 8.], [9., 9.]])
         truth = torch.tensor([[0.], [1.], [0.], [1.]])
@@ -155,6 +182,28 @@ class NormalRegionFeedbackTests(unittest.TestCase):
             self.assertEqual(result['records'][0]['boxes'], [])
             self.assertEqual(result['records'][0]['negative_rois'][0][:3], [10., 10., 40.])
             self.assertEqual(result['records'][0]['split'], 'train')
+            # A legacy deletion must not silently become normal supervision.
+            item['feedback']['negative_regions'][0]['reason'] = 'false_positive'
+            export.write_text(json.dumps({'items': [item]}), encoding='utf-8')
+            result = prepare_feedback([export], snapshot, root/'nas', [])
+            self.assertEqual(result['records'], [])
+            self.assertEqual(result['normal_region_semantics']['excluded_reasons'],
+                {'legacy_false_positive_without_explicit_normal_confirmation': 1})
+            # The confirmed human positive remains usable even when its deleted
+            # proposal cannot supply negative evidence.
+            positive = {'image_id': 7, 'case_id': 'case', 'sha256': source['sha256'],
+                'order_keys': [], 'phash': '0', 'aspect': 2., 'split': 'train',
+                'boxes': [{'id': 'human', 'problem': 'scratch', 'xyxy': [70., 30., 90., 45.]}]}
+            result = prepare_feedback([export], snapshot, root/'nas', [positive])
+            self.assertEqual(result['records'], [])
+            self.assertEqual(result['included_feedback_ids'], [8])
+            self.assertEqual(positive['boxes'][0]['problem'], 'scratch')
+            item['feedback']['negative_regions'][0]['normal_provenance'] = {
+                'source': 'human_explicit_normal', 'action': 'confirmed_false_positive', 'confirmed': True}
+            export.write_text(json.dumps({'items': [item]}), encoding='utf-8')
+            result = prepare_feedback([export], snapshot, root/'nas', [positive])
+            self.assertEqual(result['records'][0]['boxes'], positive['boxes'])
+            self.assertEqual(len(result['records'][0]['negative_rois']), 1)
             with sqlite3.connect(snapshot) as db:
                 db.execute('INSERT INTO drafts VALUES(7)')
             db.close()

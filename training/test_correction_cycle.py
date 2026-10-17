@@ -103,6 +103,37 @@ class CycleProtectionTests(unittest.TestCase):
         self.assertEqual(worker.actual_feedback_ids(dataset, [positive, holdout, region]), [3])
         self.assertEqual(worker.round_seen_feedback_ids(dataset, [positive, holdout, region]), [2, 3], 'Drifted annotations must remain available for a later valid round')
 
+    def test_generic_deleted_roi_without_positive_does_not_trigger_training(self):
+        candidate = item()
+        candidate['annotation'] = None
+        region = {'id': 'roi', 'x': .1, 'y': .1, 'w': .1, 'h': .1,
+                  'reason': 'false_positive'}
+        candidate['feedback']['negative_regions'] = [region]
+        self.assertEqual(worker.eligible_pending({'items': [candidate]}), [])
+        # A valid current positive remains eligible; the generic deleted region
+        # itself still cannot authorize negative supervision.
+        candidate['annotation'] = item()['annotation']
+        self.assertEqual(worker.eligible_pending({'items': [candidate]}), [candidate])
+
+    def test_only_explicit_valid_normal_regions_can_trigger_without_positive(self):
+        candidate = item()
+        candidate['annotation'] = None
+        for reason, action in (('false_positive', 'confirmed_false_positive'),
+                               ('process_hole', 'process_hole'),
+                               ('normal_structure', 'normal_structure')):
+            region = {'id': 'roi', 'x': .1, 'y': .1, 'w': .1, 'h': .1,
+                      'reason': reason, 'normal_provenance': {
+                          'source': 'human_explicit_normal', 'confirmed': True, 'action': action}}
+            candidate['feedback']['negative_regions'] = [region]
+            self.assertEqual(worker.eligible_pending({'items': [candidate]}), [candidate])
+            region['normal_provenance']['confirmed'] = False
+            self.assertEqual(worker.eligible_pending({'items': [candidate]}), [])
+            region['normal_provenance']['confirmed'] = True
+            region['w'] = 2
+            self.assertEqual(worker.eligible_pending({'items': [candidate]}), [])
+        candidate['feedback']['negative_regions'] = [None, []]
+        self.assertEqual(worker.eligible_pending({'items': [candidate]}), [])
+
     def test_promotion_requires_strict_improvement_and_recall(self):
         self.assertTrue(worker.promotion_decision(comparison())[0])
         self.assertFalse(worker.promotion_decision(comparison(f2=.4))[0])

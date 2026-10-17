@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import copy
+from collections import Counter
 from contextlib import closing
 import hashlib
 import io
@@ -15,6 +16,55 @@ from PIL import Image, ImageOps
 import torch
 
 from vision_classifier import assign_groups, training_exclusion_reason
+
+
+def normal_region_exclusion(region):
+    """A removed/moved/retyped box is not evidence of a normal structure.
+
+    Only an explicit local-normal action can supply negative supervision. The
+    two legacy structure actions were explicit even before provenance existed;
+    generic legacy ``false_positive`` was also produced by ordinary deletion.
+    """
+    if not isinstance(region, dict):
+        return 'invalid_normal_region'
+    reason = region.get('reason')
+    provenance = region.get('normal_provenance')
+    if provenance is not None:
+        actions = {'process_hole': 'process_hole', 'normal_structure': 'normal_structure',
+                   'false_positive': 'confirmed_false_positive'}
+        if (not isinstance(provenance, dict) or provenance.get('source') != 'human_explicit_normal'
+                or provenance.get('confirmed') is not True
+                or provenance.get('action') != actions.get(reason)
+                or reason not in actions):
+            return 'invalid_explicit_normal_provenance'
+        return ''
+    if reason in ('process_hole', 'normal_structure'):
+        return ''
+    if reason == 'false_positive':
+        return 'legacy_false_positive_without_explicit_normal_confirmation'
+    return 'normal_region_not_explicitly_confirmed'
+
+
+def correction_event_semantics(event):
+    """Audit the correction without converting any edit event into a negative."""
+    explicit = event.get('correction_semantics')
+    allowed = {'geometry', 'type', 'normal', 'replacement', 'ambiguous_delete', 'positive_addition'}
+    if isinstance(explicit, list) and all(value in allowed for value in explicit):
+        return sorted(set(explicit))
+    changes = event.get('changes', [])
+    result = []
+    if any(value in changes for value in ('moved', 'resized', 'geometry')):
+        result.append('geometry')
+    if any(value in changes for value in ('reclassified', 'type')):
+        result.append('type')
+    if event.get('kind') == 'added':
+        result.append('positive_addition')
+    if event.get('kind') in ('deleted', 'false_positive'):
+        # Even a named legacy normal action is independently checked against
+        # negative-region provenance. Audit labels never authorize supervision.
+        result.append('normal' if event.get('reason') in ('process_hole', 'normal_structure')
+                      else 'ambiguous_delete')
+    return sorted(set(result))
 
 
 def feedback_policy(feedback, label_raw, has_draft=False):
@@ -59,7 +109,7 @@ def snapshot_annotation_exclusion(feedback, document, version):
 
 def prepare_feedback(paths, snapshot, source_root, positives, historical=None):
     from prepare_detector import normalize_boxes, safe_path
-    accepted, excluded, included_feedback_ids = [], [], []
+    accepted, excluded, included_feedback_ids, region_audit, event_audit = [], [], [], [], []
     entries = []
     for feedback_path in paths:
         payload = json.loads(Path(feedback_path).read_text(encoding='utf-8-sig'))
@@ -72,6 +122,7 @@ def prepare_feedback(paths, snapshot, source_root, positives, historical=None):
                     'human_statement': 'Explicitly confirmed annotation correction',
                     'original_classification_fingerprint': feedback.get('label_fingerprint'),
                     'negative_regions': feedback.get('negative_regions', []),
+                    'events': feedback.get('events', []),
                     'feedback_id': item.get('feedback_id'),
                     'export_eligible': item.get('training_eligible_by_label_policy') is True,
                     'human_confirmed': feedback.get('status') == 'confirmed',
@@ -106,6 +157,31 @@ def prepare_feedback(paths, snapshot, source_root, positives, historical=None):
                     annotation_row['version'] if annotation_row else 0)
                 if reason:
                     raise ValueError(reason)
+                for event in feedback.get('events', []):
+                    if isinstance(event, dict):
+                        event_audit.append({'image_id': image_id, 'feedback_id': feedback.get('feedback_id'),
+                            'source_box_id': event.get('source_box_id'),
+                            'semantics': correction_event_semantics(event)})
+                candidate_regions = feedback.get('negative_regions')
+                if candidate_regions is None:
+                    candidate_regions = [feedback['rejected_region']]
+                if not isinstance(candidate_regions, list):
+                    raise ValueError('invalid_normal_region_list')
+                explicit_regions = []
+                for region in candidate_regions:
+                    exclusion = normal_region_exclusion(region)
+                    region_audit.append({'image_id': image_id, 'feedback_id': feedback.get('feedback_id'),
+                        'region_id': region.get('id') if isinstance(region, dict) else None,
+                        'reason': region.get('reason') if isinstance(region, dict) else None,
+                        'normal_supervision_allowed': not bool(exclusion), 'exclusion': exclusion,
+                        'provenance': region.get('normal_provenance') if isinstance(region, dict) else None})
+                    if not exclusion:
+                        explicit_regions.append(region)
+                matching_positive = next((r for r in positives if r['image_id'] == image_id), None)
+                # Do not open pixels for ambiguous-only feedback that supplies
+                # no current confirmed positive record either.
+                if not explicit_regions and not matching_positive:
+                    raise ValueError('feedback_has_no_current_confirmed_train_positive_or_explicit_normal_region')
                 if not row['available'] or feedback.get('relative_path') != row['relative_path']:
                     raise ValueError('feedback_source_unavailable_or_path_changed')
                 path = safe_path(source_root, row['relative_path'])
@@ -121,11 +197,8 @@ def prepare_feedback(paths, snapshot, source_root, positives, historical=None):
                     gray = np.asarray(image.convert('L').resize((32, 32)), dtype=np.float32)
                 dct = cv2.dct(gray)[:8, :8].flatten()[1:]
                 phash = sum(int(value > np.median(dct)) << bit for bit, value in enumerate(dct))
-                regions = feedback.get('negative_regions')
-                if regions is None:
-                    regions = [feedback['rejected_region']]
                 regions = normalize_boxes([dict(r, problem=r.get('problem', 'explicit_normal_region'))
-                                           for r in regions], width, height)
+                                           for r in explicit_regions], width, height)
                 case = json.loads((path.parent.parent.parent/'case.json').read_text(encoding='utf-8'))
                 orders = [field+':'+str(order[field]).strip() for order in case.get('related_orders', [])
                     for field in ('h3_object_id', 'production_no', 'crm_no', 'contract_no') if order.get(field)]
@@ -143,7 +216,6 @@ def prepare_feedback(paths, snapshot, source_root, positives, historical=None):
                 overlaps = heldout_overlap(record, positives, (historical or {}).get('records', []))
                 if overlaps:
                     raise ValueError('human_roi_overlaps_historical_or_current_holdout')
-                matching_positive = next((r for r in positives if r['image_id'] == image_id), None)
                 if matching_positive:
                     record['boxes'] = copy.deepcopy(matching_positive['boxes'])
                     for roi in record['negative_rois']:
@@ -169,7 +241,15 @@ def prepare_feedback(paths, snapshot, source_root, positives, historical=None):
                 excluded.append({'image_id': image_id, 'reason': str(error)})
     return {'records': accepted, 'excluded': excluded,
             'included_feedback_ids': sorted(set(included_feedback_ids)),
-            'policy': 'Explicit human normal ROI only; never positive truth or whole-image normal; original image-state/draft/source/fingerprint exclusions unchanged',
+            'normal_region_semantics': {'schema': 'explicit_human_normal_roi_v2',
+                'region_audit': region_audit,
+                'correction_events': event_audit,
+                'event_semantic_counts': dict(Counter(value for row in event_audit for value in row['semantics'])),
+                'input_regions_after_item_policy': len(region_audit),
+                'explicit_or_legacy_structure_regions': sum(r['normal_supervision_allowed'] for r in region_audit),
+                'excluded_reasons': dict(Counter(r['exclusion'] for r in region_audit if r['exclusion'])),
+                'note': 'Semantic permission alone does not bypass source, holdout, geometry or positive-overlap exclusions.'},
+            'policy': 'Explicit human normal ROI only; generic legacy deletions never negative supervision; never positive truth or whole-image normal; original image-state/draft/source/fingerprint exclusions unchanged',
             'holdout_policy': 'Reject any feedback whose case/order/SHA/conservative near duplicate overlaps historical or current validation/test',
             'images': len(accepted), 'regions': sum(len(r['negative_rois']) for r in accepted)}
 
