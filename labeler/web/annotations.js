@@ -131,7 +131,7 @@
     // Keep the action reachable so missing responsibility can produce a useful inline error.
     el('boxEditorDone').disabled=S.busy;popupPosition();
   }
-  function openPopup(box,x,y,before=null){if(!box)return;A.popup={boxId:box.id,x,y,before:before||annotationSnapshot(),undoLength:A.undo.length-(before?1:0),changed:!!before};renderPopup();}
+  function openPopup(box,x,y,before=null){if(!box)return;global.setLabelPanel?.();A.popup={boxId:box.id,x,y,before:before||annotationSnapshot(),undoLength:A.undo.length-(before?1:0),changed:!!before};renderPopup();}
   function confirmCurrentBox(){
     const box=popupBox();if(!box)return true;
     requireNoConflicts([box]);

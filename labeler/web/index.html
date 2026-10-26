@@ -82,10 +82,10 @@
         <button id="retryImage" class="retry-image" hidden>重新读取</button>
       </div>
       <div class="file-caption"><span id="fileName">原图不移动、不复制</span><button id="locate" class="text-button" disabled>定位原文件</button></div>
-      <div class="viewer-footer"><span>点框修改 · 左键调整 · 滚轮缩放 · Esc 取消当前框</span><span id="loadHint">按需加载 / 相邻预读</span></div>
+      <div class="viewer-footer"><span>单击图片分类 · 点框修改 · 拖动平移 · 右键框选</span><span id="loadHint">按需加载 / 相邻预读</span></div>
     </section>
-    <aside id="labelPanel" class="label-panel" role="dialog" aria-labelledby="labelPanelTitle" data-step="1" data-panel-view="details" hidden>
-      <div class="label-panel-heading"><h2 id="labelPanelTitle">图片信息与分类</h2><button id="labelPanelClose" class="text-button" aria-label="收起图片信息面板">收起</button></div>
+    <aside id="labelPanel" class="label-panel" role="dialog" aria-labelledby="labelPanelTitle" tabindex="-1" data-step="1" data-panel-view="details" hidden>
+      <div class="label-panel-heading"><h2 id="labelPanelTitle">图片信息与分类</h2><button id="classificationDetails" class="text-button">图片信息 / 备注</button><button id="labelPanelClose" class="text-button" aria-label="收起图片信息面板">收起</button></div>
       <div class="label-scroll">
         <div class="label-heading"><h2 id="workflowTitle">1 · 先找问题点</h2><button id="backToProblems" class="text-button" hidden>返回问题点</button></div>
         <p class="muted small label-intro">问题点可多选；专属问题自动定责，共性问题再选责任。</p>

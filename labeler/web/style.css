@@ -276,3 +276,35 @@
   .box-editor-columns h3 .small{display:none}
   .workspace-v2 .box-editor-actions>span{font-size:10px}
 }
+/* Image-click classification: shared label controls, two columns, opaque surface. */
+.workspace-v2 .label-panel[data-panel-view="quick"]{right:auto;bottom:auto;width:min(660px,calc(100vw - 16px));max-height:calc(100dvh - 92px);background:var(--surface);color:var(--text);box-shadow:0 8px 28px #17212e33}
+.workspace-v2 .label-panel:not([data-panel-view="quick"]) #classificationDetails{display:none}
+.workspace-v2 .label-panel[data-panel-view="quick"] .label-panel-heading{padding:9px 12px;gap:8px}
+.workspace-v2 .label-panel[data-panel-view="quick"] .label-panel-heading h2{margin-right:auto}
+.workspace-v2 .label-panel[data-panel-view="quick"] .label-scroll{display:grid;grid-template-columns:minmax(0,1.25fr) minmax(0,1fr);grid-template-rows:auto auto;gap:12px 16px;padding:12px;scrollbar-gutter:auto;align-items:start}
+.workspace-v2 .label-panel[data-panel-view="quick"] .label-tools,.workspace-v2 .label-panel[data-panel-view="quick"] .secondary-tools{display:contents}
+.workspace-v2 .label-panel[data-panel-view="quick"] .label-heading,
+.workspace-v2 .label-panel[data-panel-view="quick"] .label-intro,
+.workspace-v2 .label-panel[data-panel-view="quick"] #recommendationPanel,
+.workspace-v2 .label-panel[data-panel-view="quick"] .add-tag-details,
+.workspace-v2 .label-panel[data-panel-view="quick"] #labelNoteSection,
+.workspace-v2 .label-panel[data-panel-view="quick"] #contextDetails,
+.workspace-v2 .label-panel[data-panel-view="quick"] #rejectUnrelated{display:none!important}
+.workspace-v2 .label-panel[data-panel-view="quick"] #problemSection{display:block!important;grid-column:1;grid-row:1;margin:0}
+.workspace-v2 .label-panel[data-panel-view="quick"] #responsibilitySection{display:grid!important;grid-column:2;grid-row:1;margin:0;grid-template-rows:auto auto auto auto auto;gap:6px}
+.workspace-v2 .label-panel[data-panel-view="quick"] #defectTags{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:5px;max-height:none}
+.workspace-v2 .label-panel[data-panel-view="quick"] #defectTags button{min-height:32px;height:auto;font-size:13px;padding:5px 3px}
+.workspace-v2 .label-panel[data-panel-view="quick"] #responsibilityTags{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:5px}
+.workspace-v2 .label-panel[data-panel-view="quick"] #responsibilityTags button{min-height:32px;height:auto;font-size:13px}
+.workspace-v2 .label-panel[data-panel-view="quick"] .default-responsibility{grid-column:1/-1}
+.workspace-v2 .label-panel[data-panel-view="quick"] #imageStateSection{display:block!important;grid-column:1/-1;grid-row:2;margin:0;padding-top:10px;border-top:1px solid var(--line)}
+.workspace-v2 .label-panel[data-panel-view="quick"] .image-states{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px}
+.workspace-v2 .label-panel[data-panel-view="quick"] .image-states button{min-height:36px;height:auto;font-size:13px;padding:5px}
+.workspace-v2 .label-panel[data-panel-view="quick"] .commit-bar{padding:8px 12px}
+.workspace-v2 .label-panel[data-panel-view="quick"] #batchPanel{grid-column:1/-1}
+@media(max-width:540px){
+  .workspace-v2 .label-panel[data-panel-view="quick"] .label-scroll{grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:10px;padding:10px}
+  .workspace-v2 .label-panel[data-panel-view="quick"] #defectTags{grid-template-columns:repeat(2,minmax(0,1fr))}
+  .workspace-v2 .label-panel[data-panel-view="quick"] .label-panel-heading{flex-wrap:wrap}
+  .workspace-v2 .label-panel[data-panel-view="quick"] .responsibility-switch{grid-template-columns:1fr}
+}

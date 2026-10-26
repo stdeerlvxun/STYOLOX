@@ -239,7 +239,7 @@ function renderWorkflow(){
   document.querySelector('.label-panel').dataset.step=String(S.labelStep||1);
   $('workflowTitle').textContent=S.labelStep===2?'2 · 确认责任':'1 · 先找问题点';
   $('backToProblems').hidden=S.labelStep!==2;
-  $('commit').textContent=S.labelStep!==2&&S.current?.label.defects.length?'下一步 · 确认责任 ↵':$('statusFilter').value==='error_review'?'保存分类并完成复核 ↵':'确认保存并下一张 ↵';
+  $('commit').textContent=$('labelPanel').dataset.panelView==='quick'?'保存分类并下一张 ↵':S.labelStep!==2&&S.current?.label.defects.length?'下一步 · 确认责任 ↵':$('statusFilter').value==='error_review'?'保存分类并完成复核 ↵':'确认保存并下一张 ↵';
   $('reviewActions').hidden=!S.reviewEnabled||$('statusFilter').value!=='model_unrelated';
   $('rejectUnrelated').hidden=!S.current?.model_unrelated||S.current?.classified||S.current?.has_draft;
   $('rejectUnrelated').disabled=S.busy||S.navigating||S.dirty;
@@ -250,20 +250,29 @@ function renderWorkflow(){
 function setLabelPanel(view=null){
   const panel=$('labelPanel');if(!panel)return;
   panel.hidden=!view;
-  if(view){panel.dataset.panelView=view;$('labelPanelTitle').textContent=view==='state'?'图片状态与备注':'图片信息 / 分类';globalThis.AnnotationUI?.hideEditor?.();}
+  if(panel.style){panel.style.left='';panel.style.top='';}
+  if(view){panel.dataset.panelView=view;$('labelPanelTitle').textContent=view==='quick'?'整图快捷分类':view==='state'?'图片状态与备注':'图片信息 / 分类';globalThis.AnnotationUI?.hideEditor?.();}
   $('imageStateToggle').setAttribute('aria-expanded',String(view==='state'));
-  $('labelPanelToggle').setAttribute('aria-expanded',String(view==='details'));
+  $('labelPanelToggle').setAttribute('aria-expanded',String(view==='details'||view==='quick'));
 }
-async function submitWorkspace(){
+function openQuickClassification(x,y){
+  if(!S.current||S.busy||S.navigating||$('photo').hidden)return;
+  setLabelPanel('quick');renderTags();
+  const panel=$('labelPanel'),width=panel.offsetWidth||620,height=panel.offsetHeight||450;
+  panel.style.left=Math.max(8,Math.min(x+12,window.innerWidth-width-8))+'px';
+  panel.style.top=Math.max(8,Math.min(y+12,window.innerHeight-height-76))+'px';
+  panel.focus?.({preventScroll:true});
+}
+async function submitWorkspace(classificationOnly=false){
   if(!S.current||S.busy||S.navigating)return;
   if(globalThis.AnnotationUI?.isLoading?.())throw new Error('正在读取当前图片的补标，请稍后再保存');
   const label=S.current.label;
-  if(['','defect'].includes(label.image_state)&&globalThis.AnnotationUI?.hasWork()){
+  if(!classificationOnly&&['','defect'].includes(label.image_state)&&globalThis.AnnotationUI?.hasWork()){
     await globalThis.AnnotationUI.submitImage();return;
   }
   if(!label.defects.length&&!label.image_state){setLabelPanel('state');throw new Error('请先框选问题位置，或选择图片状态');}
   const pending=label.problem_responsibilities?label.defects.filter(problem=>!label.problem_responsibilities[problem]?.length):[];
-  if(pending.length){S.labelStep=2;S.responsibilityProblem=pending[0];setLabelPanel('details');renderTags();throw new Error('请先为“'+pending[0]+'”选择责任，拿不准可选待核');}
+  if(pending.length){S.labelStep=2;S.responsibilityProblem=pending[0];setLabelPanel($('labelPanel').dataset.panelView==='quick'?'quick':'details');renderTags();throw new Error('请先为“'+pending[0]+'”选择责任，拿不准可选待核');}
   S.labelStep=2;await commit();
 }
 function buttonTag(name,active,action){
@@ -280,6 +289,13 @@ function toggleProblemResponsibility(problem,name){
   const mapping=S.current.label.problem_responsibilities,value=mapping[problem],index=value.indexOf(name);
   mapping[problem]=index>=0?value.filter(v=>v!==name):name==='待核'?['待核']:[...value.filter(v=>v!=='待核'),name];
   syncResponsibilities(S.current.label);edited();
+}
+function chooseProblemResponsibility(problem,name){
+  const label=S.current?.label,values=label?.problem_responsibilities?.[problem];
+  if(!label||S.busy||S.navigating)return;
+  if($('labelPanel').dataset.panelView==='quick'&&values?.length===1&&values[0]===S.rules[problem]&&name!==values[0]){
+    label.problem_responsibilities[problem]=[name];syncResponsibilities(label);edited();
+  }else toggleProblemResponsibility(problem,name);
 }
 function renderResponsibilities(locked){
   const target=$('responsibilityTags'),label=S.current?.label,mapping=label?.problem_responsibilities;
@@ -299,8 +315,11 @@ function renderResponsibilities(locked){
   $('responsibilityAdvice').textContent=role?'建议 '+role+' · '+(advice.basis==='user_experience_prior'?'经验优先':advice.basis==='approved_rule'?'已确认规则':'人工关联')+association:'暂无可靠关联，请人工选择';
   $('responsibilityAdvice').title=$('responsibilityAdvice').textContent;
   $('applyResponsibilityAdvice').disabled=locked||!role||!mapping||!problems.length||values.length>0;
-  for(const name of S.tags.responsibility){
-    const button=buttonTag(name,values.includes(name),()=>problems.length?toggleProblemResponsibility(S.responsibilityProblem,name):toggleTag('responsibility',name));
+  const automatic=$('labelPanel').dataset.panelView==='quick'?S.rules[S.responsibilityProblem]:null;
+  const ordered=automatic?[...S.tags.responsibility.filter(name=>name!==automatic),automatic]:S.tags.responsibility;
+  for(const name of ordered){
+    const button=buttonTag(name,values.includes(name),()=>problems.length?chooseProblemResponsibility(S.responsibilityProblem,name):toggleTag('responsibility',name));
+    if(name===automatic){button.textContent='默认：'+name;button.classList.add('default-responsibility');}
     button.disabled=locked;target.append(button);
   }
 }
@@ -596,12 +615,13 @@ on('thumbViewport','scroll',scheduleRender);window.addEventListener('resize',sch
 on('note','input',()=>{if(S.current){S.current.label.note=$('note').value;edited();}});
 for(const button of $('imageStates').children)button.addEventListener('click',()=>{if(S.current&&!S.busy&&!S.navigating){const label=S.current.label;label.image_state=button.dataset.state;label.defects=[];if(label.problem_responsibilities){label.problem_responsibilities={};label.responsibilities=['待核'];}edited();}});
 for(const [id,group]of [['addDefect','defect'],['addResponsibility','responsibility']])on(id,'submit',async e=>{e.preventDefault();const input=$(id).elements.name;S.tags=await api('/api/tag',{group,name:input.value});input.value='';renderTags();});
-on('previous','click',()=>selectIndex(S.index-1));on('next','click',()=>selectIndex(S.index+1));on('skip','click',()=>selectIndex(S.index+1));on('commit','click',commit);
+on('previous','click',()=>selectIndex(S.index-1));on('next','click',()=>selectIndex(S.index+1));on('skip','click',()=>selectIndex(S.index+1));on('commit','click',()=>$('labelPanel').dataset.panelView==='quick'?submitWorkspace(true):commit());
 on('showLibrary','click',()=>document.body.classList.toggle('library-open'));
 on('workspacePrevious','click',()=>selectIndex(S.index-1));
-on('workspaceCommit','click',submitWorkspace);
+on('workspaceCommit','click',()=>submitWorkspace(!$('labelPanel').hidden&&$('labelPanel').dataset.panelView==='quick'));
 on('imageStateToggle','click',()=>setLabelPanel(!$('labelPanel').hidden&&$('labelPanel').dataset.panelView==='state'?null:'state'));
-on('labelPanelToggle','click',()=>setLabelPanel(!$('labelPanel').hidden&&$('labelPanel').dataset.panelView==='details'?null:'details'));
+on('labelPanelToggle','click',()=>{if(!$('labelPanel').hidden&&$('labelPanel').dataset.panelView==='quick')setLabelPanel();else openQuickClassification(window.innerWidth-640,window.innerHeight-540);});
+on('classificationDetails','click',()=>{setLabelPanel('details');renderTags();});
 on('labelPanelClose','click',()=>setLabelPanel());
 on('reviewBatchArchiveToggle','click',()=>setReviewArchive($('reviewArchivePanel').hidden));
 on('reviewArchiveClose','click',()=>setReviewArchive());
@@ -667,9 +687,20 @@ on('fullResolution','click',()=>S.current&&showPhoto(S.current,true));on('retryI
 on('contextDetails','toggle',async()=>{if($('contextDetails').open&&S.current){const id=S.current.id,data=await api('/api/context?id='+id);if(id===S.current?.id)$('caseContext').textContent=JSON.stringify(data,null,2);}});
 $('photoStage').addEventListener('wheel',e=>{if(!S.current||e.target.closest('#boxEditor'))return;e.preventDefault();S.zoom=Math.min(8,Math.max(.5,S.zoom*(e.deltaY<0?1.15:1/1.15)));transform();if(S.zoom>1.8&&!S.original){S.original=true;showPhoto(S.current,true).catch(fail);}},{passive:false});
 let drag=null;
-on('photoStage','pointerdown',e=>{if(e.button!==0||e.target.closest('button,#boxEditor'))return;drag={x:e.clientX,y:e.clientY,px:S.panX,py:S.panY};$('photoStage').setPointerCapture(e.pointerId);});
-on('photoStage','pointermove',e=>{if(drag){S.panX=drag.px+e.clientX-drag.x;S.panY=drag.py+e.clientY-drag.y;transform();}});
-on('photoStage','pointerup',()=>drag=null);on('photoStage','pointercancel',()=>drag=null);
+on('photoStage','pointerdown',e=>{
+  if(e.button!==0||e.target.closest('button,#boxEditor')||!S.current||S.busy||S.navigating||$('photo').hidden)return;
+  drag={x:e.clientX,y:e.clientY,px:S.panX,py:S.panY,pointerId:e.pointerId,moved:false};$('photoStage').setPointerCapture(e.pointerId);
+});
+on('photoStage','pointermove',e=>{if(drag&&drag.pointerId===e.pointerId){
+  drag.moved=drag.moved||Math.hypot(e.clientX-drag.x,e.clientY-drag.y)>5;
+  if(drag.moved){S.panX=drag.px+e.clientX-drag.x;S.panY=drag.py+e.clientY-drag.y;transform();}
+}});
+on('photoStage','pointerup',e=>{if(!drag||drag.pointerId!==e.pointerId)return;const completed=drag;drag=null;
+  $('photoStage').releasePointerCapture?.(e.pointerId);
+  if(!completed.moved)openQuickClassification(e.clientX,e.clientY);
+});
+on('photoStage','pointercancel',()=>drag=null);on('photoStage','lostpointercapture',()=>drag=null);
+window.addEventListener('blur',()=>drag=null);
 on('clearSelection','click',()=>{S.selected.clear();renderSelection();renderThumbs();});
 on('batch','click',()=>{
   if(!S.current)return;
@@ -700,6 +731,7 @@ document.addEventListener('keydown',e=>{
   if(e.target.closest('#reviewArchivePanel,#reviewQualityPanel'))return;
   if(e.key==='Enter'&&e.target.closest('#recommendationPanel'))return;
   if(e.target.matches('input,textarea,select,[contenteditable=true]'))return;
+  if(e.key==='Enter'&&!$('labelPanel').hidden&&$('labelPanel').dataset.panelView==='quick'){e.preventDefault();submitWorkspace(true).catch(fail);return;}
   if(e.key==='Enter'&&e.target.closest('button')&&!['commit','workspaceCommit'].includes(e.target.closest('button').id))return;
   if(e.ctrlKey&&e.key.toLowerCase()==='z'){e.preventDefault();$('undo').click();return;}
   if(e.key==='Enter'){e.preventDefault();(e.target.closest('#labelPanel')?commit():submitWorkspace()).catch(fail);return;}
@@ -708,7 +740,7 @@ document.addEventListener('keydown',e=>{
 });
 window.addEventListener('beforeunload',e=>{if(S.dirty){e.preventDefault();e.returnValue='';}});
 document.addEventListener('click',e=>{for(const details of document.querySelectorAll('.add-tag-details[open],#contextDetails[open],#responsibilityMatrix[open]'))if(!details.contains(e.target))details.open=false;});
-document.addEventListener('click',e=>{if(!$('labelPanel').hidden&&!e.target.closest('#labelPanel,#labelPanelToggle,#imageStateToggle'))setLabelPanel();});
+document.addEventListener('click',e=>{if(!$('labelPanel').hidden&&!e.target.closest('#labelPanel,#labelPanelToggle,#imageStateToggle')&&!($('labelPanel').dataset.panelView==='quick'&&e.target.closest('#photoStage')))setLabelPanel();});
 document.addEventListener('click',e=>{if(!$('reviewArchivePanel').hidden&&!e.target.closest('#reviewArchivePanel,#reviewBatchArchiveToggle'))setReviewArchive();});
 document.addEventListener('click',e=>{if(!$('reviewQualityPanel').hidden&&!e.target.closest('#reviewQualityPanel,#reviewQualityToggle'))setReviewQuality();});
 const launchStatus=new URLSearchParams(location.search).get('status');

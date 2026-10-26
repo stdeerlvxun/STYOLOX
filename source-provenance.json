@@ -209,7 +209,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "dc115a2e69bb5b59d62704c272f71d2af80cc045",
+    "source_commit": "e30db803999f07c979a48569f1112d51eb9b65d6",
     "files": [
       {
         "path": ".gitignore",
@@ -368,6 +368,10 @@
         "sha256": "19b17b02eb261eec5b6bcca45633aaf793aa5bfff1acfbf0844223aa400ca626"
       },
       {
+        "path": "test_quick_classification.cjs",
+        "sha256": "fdae8ab1d792911ebbc9573fb82f6f129fc5fe3bfade21b1148e8b36fdfddb4a"
+      },
+      {
         "path": "test_recommendations.py",
         "sha256": "4ade29c00bdd0431045378eb02c8d968ff04c732308a22c5d8a608df8af8af23"
       },
@@ -417,19 +421,19 @@
       },
       {
         "path": "web/annotations.js",
-        "sha256": "a31ad0629985b73168954c15e674c0b15d6b422b5a1882f0624bf1946cfe41a2"
+        "sha256": "c1675ba2d2dde3c8c58fb69f5d2f8ab11b214d3cc6f73d0638348e53078cd027"
       },
       {
         "path": "web/app.js",
-        "sha256": "05fd4f03bf0c565d8176f0df98150a689d34c81787991259bc4135a77ba7469c"
+        "sha256": "92914b8892485a804c25482209cd94e377fec4067ad916a97c62aab3dd55fafb"
       },
       {
         "path": "web/index.html",
-        "sha256": "1d4a3896a498930da22bc4c612d471645e181a0ea5bd7de592e9906dc99ecd57"
+        "sha256": "e8e71ee747cfda98b49529b4592c9b72289b5e1d112903847fb19ef5a8b81194"
       },
       {
         "path": "web/style.css",
-        "sha256": "9c5cb79ae5782cbb3b59e840a908437211e6dc752eec44d9081c83395268e7e8"
+        "sha256": "fa2d2cffd36b5f0d1ac4d8b7401a80f3bd27205be70ee9bdd50293866c49e92b"
       },
       {
         "path": "启动分类工具.cmd",
