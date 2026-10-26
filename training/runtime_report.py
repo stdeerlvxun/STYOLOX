@@ -16,12 +16,12 @@ def send(config, kind, value):
         return False
     try:
         base = config['api_url'].rstrip('/')
-        with urllib.request.urlopen(base+'/api/state', timeout=3) as response:
+        with urllib.request.urlopen(base+'/api/state', timeout=15) as response:
             state = json.load(response)
         body = json.dumps({'kind': kind, 'root_id': state['root']['id'], 'value': value}).encode('utf-8')
         request = urllib.request.Request(base+'/api/automation/report', body,
             headers={'Content-Type': 'application/json', 'X-Local-Token': state['token']})
-        with urllib.request.urlopen(request, timeout=3) as response:
+        with urllib.request.urlopen(request, timeout=5) as response:
             return json.load(response).get('ok') is True
     except (OSError, ValueError, KeyError):
         # An older/offline service must not stop inference or training.
@@ -75,7 +75,7 @@ def stage(config, report, status, run=None):
         yield
     finally:
         stopped.set()
-        thread.join(timeout=7)
+        thread.join(timeout=21)
 
 
 COUNTERS = ('attempted_images','generated_images','generated_boxes','images_without_boxes','errors','imported_images')

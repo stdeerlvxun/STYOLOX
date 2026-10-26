@@ -1,6 +1,7 @@
 import json
 import tempfile
 import unittest
+import io
 from pathlib import Path
 from unittest.mock import patch
 from runtime_report import inference_value, training_value, send, stage
@@ -54,6 +55,13 @@ class RuntimeReportTests(unittest.TestCase):
             with stage(self.config,report,'training'):
                 self.assertEqual(report['status'],'training')
         self.assertTrue((self.root/'training-runtime.json').exists())
+
+    def test_full_state_request_allows_production_latency(self):
+        responses=[io.BytesIO(b'{"root":{"id":1},"token":"test"}'),io.BytesIO(b'{"ok":true}')]
+        with patch('runtime_report.urllib.request.urlopen',side_effect=responses) as request:
+            self.assertTrue(send({'api_url':'http://localhost'},'training',{'status':'training'}))
+        self.assertEqual(request.call_args_list[0].kwargs['timeout'],15)
+        self.assertEqual(request.call_args_list[1].kwargs['timeout'],5)
 
 
 if __name__=='__main__':unittest.main()
