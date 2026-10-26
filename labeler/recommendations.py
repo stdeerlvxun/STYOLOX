@@ -77,10 +77,12 @@ class Recommendations:
     def state(self):
         return {'enabled':self.enabled,'model_id':self.meta.get('model_id') if self.meta else None,
                 'human_confirmation_required':True,'responsibility_output':False,
+                'automatic_classification_enabled':self.enabled,'human_confirmation_blocks_automation':False,
+                'automatic_counts':self.store.automatic.counts(),
                 'unrelated_suggestions_enabled':bool(self.meta and self.meta.get('state_filter'))}
 
     def start_review_scan(self):
-        if not self.enabled or not self.meta.get('state_filter'):return
+        if not self.enabled:return
         self.store.review_model=self.meta['model_id']
         with self.store.lock,self.store.db:
             self.store.db.execute("INSERT OR REPLACE INTO settings VALUES('review_model',?)",(self.meta['model_id'],))
@@ -91,19 +93,15 @@ class Recommendations:
         # Human labels/drafts and every model decision remain in separate tables.
         while True:
             try:
-                root=self.store.current_root()
-                row=self.store.one('''SELECT i.* FROM images i LEFT JOIN labels l ON l.image_id=i.id
-                    LEFT JOIN drafts d ON d.image_id=i.id WHERE i.root_id=? AND i.available=1
-                    AND l.image_id IS NULL AND d.image_id IS NULL AND NOT EXISTS
-                    (SELECT 1 FROM model_reviews m WHERE m.image_id=i.id AND m.model_id=?
-                     AND m.source_size=i.size AND m.source_mtime=i.mtime_ns)
-                    ORDER BY i.reported_at DESC,i.relative_path LIMIT 1''',(root['id'],self.meta['model_id']))
+                row=self.store.automatic.next_image(self.meta['model_id'])
                 if not row:time.sleep(3);continue
                 result=self.get(row['id'],{'prefetch':['1']})
                 if result['status'] in ('queued','running'):
                     time.sleep(.25);continue
-                if result['status'] in ('error','unavailable'):
-                    self.store.record_model_review(row,{'model_id':self.meta['model_id']},(row['size'],row['mtime_ns']))
+                if result['status'] in ('error','unavailable','protected','source_changed'):
+                    from app import RESPONSIBILITY_RULES
+                    self.store.automatic.record(row,{'model_id':self.meta['model_id']},
+                        (row['size'],row['mtime_ns']),RESPONSIBILITY_RULES,error=result['status'])
                 time.sleep(.15)
             except Exception as exc:
                 print(f'Unrelated review scan deferred: {exc}',flush=True);time.sleep(3)
@@ -111,7 +109,13 @@ class Recommendations:
     def eligible(self, image_id):
         with self.store.lock:
             return not self.store.one('SELECT image_id FROM labels WHERE image_id=? UNION ALL '
-                'SELECT image_id FROM drafts WHERE image_id=?',(image_id,image_id))
+                "SELECT image_id FROM drafts WHERE image_id=? UNION ALL SELECT image_id FROM annotation_documents "
+                "WHERE image_id=? AND json_extract(data,'$.status')='confirmed'",(image_id,image_id,image_id))
+
+    def record_result(self, record, result, stamp):
+        from app import RESPONSIBILITY_RULES
+        self.store.automatic.record(record,result,stamp,RESPONSIBILITY_RULES)
+        self.store.record_model_review(record,result,stamp)
 
     def get(self, image_id, params=None):
         # Recheck on EVERY request, including cached results and completed jobs.
@@ -119,8 +123,13 @@ class Recommendations:
         if not self.enabled:return {'status':'disabled','image_id':image_id}
         record=self.store.image(image_id)
         if not record['available']:return {'status':'unavailable','image_id':image_id}
-        path=self.store.path(record);stat=path.stat()
+        try:
+            path=self.store.path(record);stat=path.stat()
+        except OSError:
+            return {'status':'unavailable','image_id':image_id}
         stamp=(stat.st_size,stat.st_mtime_ns)
+        if stamp != (record['size'],record['mtime_ns']):
+            return {'status':'source_changed','image_id':image_id}
         key=hashlib.sha256(f"{self.meta['model_id']}|{self.meta.get('onnx_sha256')}|{record['root_id']}|"
             f"{record['relative_path']}|{stamp}".encode()).hexdigest()
         params=params or {}
@@ -130,7 +139,7 @@ class Recommendations:
         with self.lock:
             cached=self.db.execute('SELECT payload FROM cache WHERE key=?',(key,)).fetchone()
             if cached:
-                result=json.loads(cached[0]);self.store.record_model_review(record,result,stamp);return result
+                result=json.loads(cached[0]);self.record_result(record,result,stamp);return result
             previous=self.pending.get(key)
             if previous and previous['status']=='error' and (params.get('retry') or time.time()-previous['at']>30):
                 self.pending.pop(key);previous=None
@@ -172,11 +181,17 @@ class Recommendations:
                     result['image_state_suggestion']=({'state':'unrelated','name':'疑似无关图片','score':score,
                         'requires_human_confirmation':True} if score is not None and score>=auxiliary['threshold'] else None)
                     result['state_filter_model_id']=auxiliary['model_id']
-                self.store.record_model_review(record,result,job['stamp'])
+                self.record_result(record,result,job['stamp'])
                 with self.lock:
                     self.db.execute('INSERT OR REPLACE INTO cache VALUES(?,?)',
                         (key,json.dumps(result,ensure_ascii=False)));self.db.commit()
             except Exception as exc:
+                from app import RESPONSIBILITY_RULES
+                try:
+                    self.store.automatic.record(record,{'model_id':self.meta['model_id']},job['stamp'],
+                        RESPONSIBILITY_RULES,error=str(exc))
+                except Exception as persist_error:
+                    print(f'Cannot persist inference failure for {image_id}: {persist_error}',flush=True)
                 with self.lock:self.pending[key]={'status':'error','image_id':image_id,'at':time.time()}
                 print(f'Recommendations unavailable for {image_id}: {exc}',flush=True)
             finally:

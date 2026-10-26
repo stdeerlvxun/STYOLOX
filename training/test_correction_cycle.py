@@ -198,6 +198,14 @@ class CycleProtectionTests(unittest.TestCase):
             with self.subTest(reason=reason), patch.object(worker, 'run_process', side_effect=[process, counters]):
                 self.assertEqual(worker.gpu_available(), (False, reason))
 
+    def test_inference_allows_idle_compute_client_but_still_checks_resources(self):
+        for counters, expected in [('4096, 1', (True, 'gpu_available')),
+                                   ('1024, 1', (False, 'insufficient_free_gpu_memory')),
+                                   ('4096, 65', (False, 'gpu_utilization_above_limit'))]:
+            with self.subTest(counters=counters), patch.object(worker, 'run_process',
+                    side_effect=['999999, python.exe\n', counters]):
+                self.assertEqual(worker.gpu_available(inference=True), expected)
+
     def test_os_lock_rejects_second_owner_and_releases(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)/'worker.lock'

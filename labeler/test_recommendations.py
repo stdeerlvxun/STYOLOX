@@ -72,6 +72,9 @@ class RecommendationTest(unittest.TestCase):
         try:
             rec.get(self.ids[0]);rec.jobs.join();first=rec.get(self.ids[0])
             Image.new('RGB',(150,150),'red').save(self.source/'0.jpg')
+            self.assertEqual(rec.get(self.ids[0])['status'],'source_changed')
+            self.app.scanner.start(self.store.current_root())
+            while self.app.scanner.status['running']:time.sleep(.01)
             rec.get(self.ids[0]);rec.jobs.join();second=rec.get(self.ids[0])
             self.assertNotEqual(first['source_sha256'],second['source_sha256'])
             rec.meta={**self.meta,'model_id':'another-version'}

@@ -174,6 +174,8 @@ class Store:
         self.backup()
         from annotations import Annotations
         self.annotations=Annotations(self)
+        from automatic_classification import AutomaticClassifications
+        self.automatic = AutomaticClassifications(self)
 
     def backup(self):
         folder = self.data_dir / "backups"
@@ -245,6 +247,10 @@ class Store:
         record["has_draft"] = bool(draft)
         record["draft_fingerprint"] = hashlib.sha256(draft["data"].encode()).hexdigest() if draft else None
         record["classified"] = bool(committed)
+        record['automatic_classification'] = self.automatic.current(record)
+        record['classification_source'] = 'human' if committed else 'machine' if record['automatic_classification'] else 'none'
+        if not committed and not draft and record['automatic_classification']:
+            record['label'] = record['automatic_classification']['label']
         record['has_annotations']=bool(self.one('SELECT image_id FROM annotation_documents WHERE image_id=?',(image_id,)))
         record['error_review']=self.annotations.review(image_id)
         record["model_unrelated"] = bool(not committed and not draft and self.one(
@@ -364,7 +370,16 @@ class Store:
         root = self.current_root()
         parts, values = ["i.root_id=?"], [root["id"]]
         status = params.get("status", ["all"])[0]
-        if status == "unclassified":
+        machine = self.automatic.match()
+        if status == 'automatic':
+            parts.extend(['l.image_id IS NULL', machine])
+        elif status == 'inference_pending':
+            parts.extend(['l.image_id IS NULL', 'd.image_id IS NULL', 'i.available=1',
+                          "NOT EXISTS(SELECT 1 FROM annotation_documents a WHERE a.image_id=i.id AND json_extract(a.data,'$.status')='confirmed')",
+                          '(m.image_id IS NULL OR NOT ('+machine+'))'])
+        elif status == 'machine_unresolved':
+            parts.extend(['l.image_id IS NULL', machine, "json_extract(m.data,'$.outcome')='unresolved'"])
+        elif status == "unclassified":
             parts.append("l.image_id IS NULL")
             if self.review_model:
                 parts.append("(d.image_id IS NOT NULL OR NOT " + self.review_match() + ")")
@@ -397,7 +412,8 @@ class Store:
         for key, field in (("defect", "defects"), ("responsibility", "responsibilities")):
             tags = params.get(key, [])
             if tags:
-                parts.append("EXISTS (SELECT 1 FROM json_each(l.data,'$." + field + "') WHERE value IN (" +
+                effective = "COALESCE(l.data,CASE WHEN "+machine+" THEN json_extract(m.data,'$.label') END)"
+                parts.append("EXISTS (SELECT 1 FROM json_each("+effective+",'$." + field + "') WHERE value IN (" +
                              ",".join("?" for _ in tags) + "))")
                 values.extend(tags)
         search = params.get("q", [""])[0].strip()
@@ -464,7 +480,8 @@ class Store:
 
     def listing(self, params, export=False):
         where, values = self.where(params)
-        join = " FROM images i LEFT JOIN labels l ON l.image_id=i.id LEFT JOIN drafts d ON d.image_id=i.id "
+        join = (" FROM images i LEFT JOIN labels l ON l.image_id=i.id LEFT JOIN drafts d ON d.image_id=i.id "
+                "LEFT JOIN automatic_classifications m ON m.image_id=i.id ")
         total = self.one("SELECT COUNT(*) AS n" + join + "WHERE " + where, values)["n"]
         offset = max(0, int(params.get("offset", ["0"])[0]))
         limit = min(100, max(1, int(params.get("limit", ["40"])[0])))
@@ -486,6 +503,9 @@ class Store:
         rows = self.query(sql, values)
         for row in rows:
             row["label"] = json.loads(row.pop("label_data")) if row["label_data"] else None
+            row['automatic_classification'] = self.automatic.current(row)
+            row['display_label'] = row['label'] or (row['automatic_classification'] or {}).get('label')
+            row['classification_source'] = 'human' if row['label'] else 'machine' if row['automatic_classification'] else 'none'
         return {"items": rows, "total": total, "offset": offset, "position": position}
 
     def counts(self):
@@ -503,15 +523,29 @@ class Scanner:
         self.status = {"running": False, "found": 0, "error": "", "errors": 0}
         self.lock = threading.Lock()
 
-    def start(self, root):
+    def start(self, root, recent=False):
         with self.lock:
             if self.status["running"]:
                 raise ValueError("目录正在扫描，请稍后再试")
             self.status = {"running": True, "found": 0, "error": "", "errors": 0,
-                           "root_id": root["id"], "started_at": now()}
-        threading.Thread(target=self.run, args=(root,), daemon=True).start()
+                           "root_id": root["id"], "started_at": now(), 'scope':'recent' if recent else 'full'}
+        threading.Thread(target=self.run, args=(root,recent), daemon=True).start()
 
-    def run(self, root):
+    def start_periodic(self, interval=120):
+        def loop():
+            last_full = time.monotonic()
+            while True:
+                time.sleep(interval)
+                if self.status['running']:continue
+                full = time.monotonic()-last_full >= 86400
+                try:
+                    self.start(self.store.current_root(), recent=not full)
+                    if full:last_full=time.monotonic()
+                except ValueError:
+                    pass
+        threading.Thread(target=loop,daemon=True,name='automatic-image-index').start()
+
+    def run(self, root, recent=False):
         stamp = secrets.token_hex(12)
         pending = []
 
@@ -532,14 +566,20 @@ class Scanner:
             base = Path(root["path"])
             if not base.is_dir():
                 raise ValueError("原始目录暂时无法访问，请确认 NAS 连接后重新扫描")
-            stack = [(base, {"date": "", "source": ""})]
+            targets=[base]
+            if recent:
+                today=dt.datetime.now(dt.timezone(dt.timedelta(hours=8))).date()
+                previous=today.replace(day=1)-dt.timedelta(days=1)
+                months=sorted({today.strftime('%Y-%m'),previous.strftime('%Y-%m')})
+                targets=[base/month for month in months if (base/month).is_dir()] or [base]
+            stack = [(folder, {"date": "", "source": ""}) for folder in targets]
             while stack:
                 folder, inherited_date = stack.pop()
                 date_info = inherited_date.copy()
                 files = []
                 try:
                     with os.scandir(folder) as entries:
-                        for entry in entries:
+                        for entry in sorted(entries, key=lambda entry: entry.name):
                             if entry.is_dir(follow_symlinks=False):
                                 stack.append((Path(entry.path), date_info))
                             elif entry.name == "case.json" and entry.is_file(follow_symlinks=False):
@@ -575,11 +615,11 @@ class Scanner:
                 except OSError:
                     self.status["errors"] += 1
             flush()
-            if not self.status["errors"]:
+            if not self.status["errors"] and not recent:
                 with self.store.lock, self.store.db:
                     self.store.db.execute("UPDATE images SET available=0 WHERE root_id=? AND last_seen<>?",
                                           (root["id"], stamp))
-            else:
+            elif self.status["errors"]:
                 self.status["error"] = "部分子目录暂时无法读取，已有标签已保留；可重新扫描"
         except Exception as exc:
             self.status["error"] = str(exc)
@@ -724,9 +764,10 @@ class Application:
         self.images = ImageQueue(self.store)
         from recommendations import Recommendations
         self.recommendations = Recommendations(self.store, self.images, recommendation_model)
-        if unrelated_review:self.recommendations.start_review_scan()
+        if self.recommendations.enabled:self.recommendations.start_review_scan()
         self.token = secrets.token_urlsafe(32)
         self.scanner.start(self.store.current_root())
+        if self.recommendations.enabled:self.scanner.start_periodic()
         self.import_preview = None
 
     def state(self):
@@ -1041,13 +1082,15 @@ class Handler(BaseHTTPRequestHandler):
         root = self.app.store.current_root()
         rows = []
         for item in items:
+            effective=item['display_label'] or {'defects':[], 'responsibilities':[], 'image_state':'', 'note':''}
             rows.append({"image_id": item["id"], "relative_path": item["relative_path"],
                          "case_id": item["case_id"], "attachment_id": item["attachment_id"],
                          "sha256": item["sha256"], "source_available": bool(item["available"]),
                          "classified": item["label"] is not None,
+                         "classification_source":item['classification_source'],
+                         "machine_model_id":(item['automatic_classification'] or {}).get('model_id'),
                          "reported_at": item["reported_at"], "date_source": item["date_source"],
-                         **(item["label"] or {"defects": [], "responsibilities": [],
-                                             "image_state": "", "note": ""}),
+                         **effective,
                          "updated_at": item["updated_at"]})
         kind = params.get("format", ["json"])[0]
         filename = "image-labels-" + dt.datetime.now().strftime("%Y%m%d-%H%M%S") + "." + kind
@@ -1058,7 +1101,7 @@ class Handler(BaseHTTPRequestHandler):
         elif kind == "csv":
             output = io.StringIO(newline="")
             fields = ["image_id", "relative_path", "case_id", "attachment_id", "sha256", "source_available",
-                      "classified", "reported_at", "date_source", "defects", "responsibilities",
+                      "classified", "classification_source", "machine_model_id", "reported_at", "date_source", "defects", "responsibilities",
                       "problem_responsibilities", "image_state", "note", "updated_at"]
             writer = csv.DictWriter(output, fieldnames=fields)
             writer.writeheader()

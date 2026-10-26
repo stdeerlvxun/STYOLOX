@@ -271,16 +271,16 @@ def refill_cycle(config_path, check_only=False):
                 pending = api(config, '/api/annotation-proposals/state')['pending']; report['pending'] = pending
                 if type(pending) is not int or pending < 0:
                     raise ValueError('Invalid pending review count')
-                if pending >= policy['low_water']:
+                if pending >= policy['low_water'] and not config.get('continuous_inference_enabled', False):
                     report['status'] = 'queue_sufficient'
                 else:
-                    available, reason = worker.gpu_available(config)
+                    available, reason = worker.gpu_available(config, inference=True)
                     if not available:
                         report.update(status='waiting_for_gpu', detail=reason)
                     else:
                         batch_id = 'refill-'+dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+uuid.uuid4().hex[:6]
                         run = root/batch_id; run.mkdir(parents=True, exist_ok=False)
-                        report.update(status='generating', batch_id=batch_id, detail='正在使用当前已验证模型生成下一批待审核框。')
+                        report.update(status='generating', batch_id=batch_id, detail='正在独立识别新图片，人工审核进度不影响执行。')
                         publish_status(config, report)
                         snapshot = run/'labels.sqlite3'; manifest = run/'proposals.json'
                         remote_snapshot = PurePosixPath(config['remote_data'])/'training-snapshots'/(batch_id+'.sqlite3')

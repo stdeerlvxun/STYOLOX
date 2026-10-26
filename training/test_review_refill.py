@@ -184,6 +184,25 @@ class RefillTests(unittest.TestCase):
                 result = refill.refill_cycle(path)
             self.assertEqual(result['status'], 'queue_sufficient')
 
+    def test_continuous_inference_is_not_blocked_by_human_review_backlog(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);value={**config(root),'review_refill_enabled':True,
+                                       'continuous_inference_enabled':True}
+            path=root/'config.json';worker.atomic_json(path,value)
+            with patch.object(refill,'api',return_value={'pending':1000}), patch.object(refill,'publish_status'), \
+                    patch.object(worker,'gpu_available',return_value=(False,'busy')) as gpu:
+                self.assertEqual(refill.refill_cycle(path)['status'],'waiting_for_gpu')
+                gpu.assert_called_once_with(worker.validate_config(value),inference=True)
+
+    def test_training_only_does_not_run_refill(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root=Path(directory);value={**config(root),'review_refill_enabled':True}
+            path=root/'config.json';worker.atomic_json(path,value)
+            with patch.object(refill,'refill_cycle',side_effect=AssertionError('inference called')), \
+                    patch.object(worker,'training_cycle',return_value={'status':'checked'}) as training:
+                self.assertEqual(worker.cycle(path,check_only=True,training_only=True)['status'],'checked')
+                training.assert_called_once()
+
     def test_busy_gpu_and_training_lock_wait_without_inference(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); value = {**config(root), 'review_refill_enabled': True}; path = root/'config.json'; worker.atomic_json(path, value)

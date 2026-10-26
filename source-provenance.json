@@ -1,6 +1,6 @@
 {
   "training": {
-    "source_commit": "f118098fa6f722ed5ba11c3546643be77269ab12",
+    "source_commit": "a362131c562be2b6d4819556f1ddea754899dbbe",
     "files": [
       {
         "path": ".gitignore",
@@ -32,7 +32,7 @@
       },
       {
         "path": "correction_cycle.py",
-        "sha256": "b3b58276ee990debf53a9b9f14125eb559882023b15412dd22261048246f3824"
+        "sha256": "f9725848188645dcc451382783b97f922b673356fd9327c30e06fac6a672f100"
       },
       {
         "path": "correction_focus.py",
@@ -75,6 +75,10 @@
         "sha256": "bd53d55592547ac49859a3e6b6b40ad24fb3391880f92a1f19253a358fc73a2e"
       },
       {
+        "path": "normal_semantics.py",
+        "sha256": "2aca3a61eeead12da7652414ce36b2b1e4ed76dfaa402a86a29cda19ab6acb3e"
+      },
+      {
         "path": "prepare_detector.py",
         "sha256": "2cbe52e903eb9e6d46a01c84817542c74119cfab71befa7a40e2fed01b8020ec"
       },
@@ -88,11 +92,11 @@
       },
       {
         "path": "review_refill.py",
-        "sha256": "0d09ed00f6c7e02c1f98944f8dcfb058a70936e128162b1a535833b715ce0a5c"
+        "sha256": "73f6317134632925e96f2f8931c125767fce5116536c73f99e781caf90ef4747"
       },
       {
         "path": "roi_feedback.py",
-        "sha256": "e28af2c1e65a7998212f1e68bbee33f9ef9d9d8faa58f053913b6a6ad38ae8f4"
+        "sha256": "afcdd028c4f4f0a7b204db411c3995fbc8fba3ecdd91dcaf161a00a65066ee27"
       },
       {
         "path": "roi_verifier.py",
@@ -112,7 +116,7 @@
       },
       {
         "path": "test_correction_cycle.py",
-        "sha256": "560e0abdadcc83fdc57289a7b4def5a6b29b13e1d0ea789ac7da26de52f00537"
+        "sha256": "80d32ceab6d71b7fc12823f73835240b73bb67c0c472d8e7f628d690e6d49bdf"
       },
       {
         "path": "test_correction_focus.py",
@@ -148,7 +152,7 @@
       },
       {
         "path": "test_review_refill.py",
-        "sha256": "c750f833b2d9295aeedb52eea49a664fea3cf8ff69d825bc953411a9eb9ad7cf"
+        "sha256": "b6ad8097a22f0c3ae39732b5aae14942888f93d471bcc4c60d26865f6eb4ff60"
       },
       {
         "path": "test_roi_feedback.py",
@@ -205,7 +209,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "fa99705ac214908c76d932cfaace6cc007bd28f3",
+    "source_commit": "dc115a2e69bb5b59d62704c272f71d2af80cc045",
     "files": [
       {
         "path": ".gitignore",
@@ -233,7 +237,11 @@
       },
       {
         "path": "app.py",
-        "sha256": "3a518e0369a95c5e56ff08dcaf10e54fe25159efaa731e7823d69b1e2906dcc0"
+        "sha256": "098780145860af4d04255d0c719cd39fed2a3056d45ab9254b1bab74bedd132d"
+      },
+      {
+        "path": "automatic_classification.py",
+        "sha256": "7ea6b0f28c11279b2aa1f52d9b3cb8da5df12ae6a439a122c9c48f01ba80f06f"
       },
       {
         "path": "deployment/enable_recommendations_101.py",
@@ -305,7 +313,7 @@
       },
       {
         "path": "recommendations.py",
-        "sha256": "ec312570f94430b6a3c4074e37a6ba72784a13fdaab162e75bf7af04dccd53ec"
+        "sha256": "3de05c426cc91b5b304852e9436ab96e22a0b9f8fc2cf7b07eed856c9b418a5d"
       },
       {
         "path": "requirements.txt",
@@ -344,6 +352,10 @@
         "sha256": "b89c03dd503b65e8b82898c0efa6c0d7bcff96d42a151844a158d0aab60f9ebc"
       },
       {
+        "path": "test_automatic_classification.py",
+        "sha256": "94d3f526b5e20c9c685cfc20366d4af1fd2338dd5a78350312fa60d79d380e93"
+      },
+      {
         "path": "test_box_flow_ui.cjs",
         "sha256": "d07f65868842a6dd23f4e059a82e17d7b98232ee47934f696b159e1031f80c7a"
       },
@@ -353,11 +365,11 @@
       },
       {
         "path": "test_filter_ui.cjs",
-        "sha256": "ec5c4ebd13d4419f7dc7a0f20ee26d916ab5dc23fb3575b0b2a60b98fbe5e009"
+        "sha256": "19b17b02eb261eec5b6bcca45633aaf793aa5bfff1acfbf0844223aa400ca626"
       },
       {
         "path": "test_recommendations.py",
-        "sha256": "9956c2a5ca5fb8b595a2d13a037ceeadd505ef022b991d0064d575b9ff5fe763"
+        "sha256": "4ade29c00bdd0431045378eb02c8d968ff04c732308a22c5d8a608df8af8af23"
       },
       {
         "path": "test_review_batch_api.py",
@@ -409,11 +421,11 @@
       },
       {
         "path": "web/app.js",
-        "sha256": "c0dcd116b05d6b66a915fa17913211e08303ed5557d5f884421508819fcec280"
+        "sha256": "05fd4f03bf0c565d8176f0df98150a689d34c81787991259bc4135a77ba7469c"
       },
       {
         "path": "web/index.html",
-        "sha256": "6c4cddfdca2dbcb90e21e1530b1e0a9866af73480fc0dd2312fed7f77185af21"
+        "sha256": "1d4a3896a498930da22bc4c612d471645e181a0ea5bd7de592e9906dc99ecd57"
       },
       {
         "path": "web/style.css",

@@ -107,7 +107,7 @@ def valid_region(region):
 
 def eligible_pending(payload):
     """Count images, not button presses; keep the existing image-state policy."""
-    from roi_feedback import normal_region_exclusion
+    from normal_semantics import normal_region_exclusion
 
     result = []
     for item in payload['items']:
@@ -285,7 +285,7 @@ def run_process(arguments, *, timeout, cwd=None, log=None):
     return result.stdout
 
 
-def gpu_available(config=None):
+def gpu_available(config=None, *, inference=False):
     config = config or {}
     try:
         output = run_process(['nvidia-smi', '--query-compute-apps=pid,process_name',
@@ -308,7 +308,7 @@ def gpu_available(config=None):
         name = fields[1].strip().strip('"').replace('\\', '/').rsplit('/', 1)[-1].lower()
         if name.endswith('.exe'):
             name = name[:-4]
-        if pid!=os.getpid() and name in compute_names:
+        if not inference and pid!=os.getpid() and name in compute_names:
             return False, 'another_gpu_compute_process_is_running'
     try:
         first_gpu = next(line for line in resources.splitlines() if line.strip())
@@ -509,10 +509,10 @@ def training_cycle(config_path, check_only=False):
     return report
 
 
-def cycle(config_path, check_only=False, refill_only=False):
+def cycle(config_path, check_only=False, refill_only=False, training_only=False):
     config = validate_config(read_json(config_path))
     refill = None
-    if config.get('review_refill_enabled', False) or refill_only:
+    if not training_only and (config.get('review_refill_enabled', False) or refill_only):
         from review_refill import refill_cycle
         try:
             refill = refill_cycle(config_path, check_only=check_only)
@@ -548,9 +548,11 @@ if __name__=='__main__':
     parser.add_argument('--config', type=Path, required=True)
     parser.add_argument('--check-only', action='store_true')
     parser.add_argument('--refill-only', action='store_true', help='Only refill review proposals; never start training')
+    parser.add_argument('--training-only', action='store_true', help='Only process reviewed training; inference runs independently')
     args = parser.parse_args()
+    if args.training_only and args.refill_only:parser.error('Choose only one worker mode')
     try:
-        result = cycle(args.config, args.check_only, args.refill_only)
+        result = cycle(args.config, args.check_only, args.refill_only, args.training_only)
         print(json.dumps(result, ensure_ascii=False), flush=True)
         sys.exit(1 if result['status']=='error' else 0)
     except Exception as error:

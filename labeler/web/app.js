@@ -227,7 +227,7 @@ function renderThumbs(){
     const image=document.createElement('img');image.alt='';image.dataset.image=item.id;image.loading='lazy';card.append(image);
     const check=document.createElement('input');check.type='checkbox';check.className='select-box';check.checked=S.selected.has(item.id);check.setAttribute('aria-label','批量选择第'+(i+1)+'张');
     check.addEventListener('click',e=>e.stopPropagation());check.addEventListener('change',()=>{check.checked?S.selected.add(item.id):S.selected.delete(item.id);renderThumbs();renderSelection();});card.append(check);
-    if(item.label){const tag=document.createElement('span');tag.className='classified';tag.textContent='已分类';card.append(tag);}
+    if(item.display_label||item.label){const tag=document.createElement('span');tag.className='classified';tag.textContent=item.label?'人工确认':'自动分类';card.append(tag);}
     const caption=document.createElement('span');caption.className='caption';caption.textContent=(item.reported_at?.slice(0,10)||'日期待补')+' · '+item.file_name;caption.title=item.relative_path;card.append(caption);
     space.append(card);queueThumb(item);
   }
@@ -489,7 +489,7 @@ async function selectIndex(index,{internal=false}={}){
   S.current=detail;S.recommendation=null;S.recommendationPage=0;S.responsibilityProblem='';S.labelStep=1;S.responsibilityEdit.clear();S.index=index;S.dirty=false;S.revision++;S.original=false;
   document.body.classList.remove('library-open');
   setLabelPanel();
-  $('note').value=detail.label.note;saveIndicator(detail.has_draft?'已恢复暂存':detail.classified?'已分类':'尚未分类',detail.has_draft||detail.classified?'saved':'');
+  $('note').value=detail.label.note;saveIndicator(detail.has_draft?'已恢复暂存':detail.classified?'人工已确认':detail.classification_source==='machine'?'已自动分类 · 可纠正':'等待后台识别',detail.has_draft||detail.classified||detail.classification_source==='machine'?'saved':'');
   $('position').textContent=(index+1)+' / '+S.total;$('fileName').textContent=detail.relative_path;$('fileName').title=detail.full_path;
   $('commit').disabled=false;$('locate').disabled=false;$('contextDetails').open=false;
   $('caseContext').textContent='展开后按需读取售后单信息。';resetTransform();renderTags();renderThumbs();
@@ -550,7 +550,9 @@ async function refreshState(){
   $('sourceNote').textContent=state.server_mode?'原图在 NAS · 标签保存在 101':'直接查看原图 · 标签保存在本机';
   $('locate').textContent=state.server_mode?'复制原文件路径':'定位原文件';
   if(!$('manifestPath').value)$('manifestPath').value=state.default_manifest;
-  $('counts').textContent='已索引 '+state.counts.total+' · 已分类 '+state.counts.classified+' · 未分类 '+(state.counts.total-state.counts.classified);
+  const automatic=state.recommendations?.automatic_counts||{};
+  $('counts').textContent='已索引 '+state.counts.total+' · 自动分类 '+(automatic.completed||0)+' · 人工确认 '+state.counts.classified+' · 待识别 '+(automatic.waiting||0);
+  if(automatic.failed)$('counts').textContent+=' · 识别重试 '+automatic.failed;
   if(S.reviewEnabled)$('counts').textContent+=' · 模型无关待审核 '+state.model_review.pending;
   if(state.error_review_counts?.total)$('counts').textContent+=' · 错例复核 '+(state.error_review_counts.total-state.error_review_counts.pending)+'/'+state.error_review_counts.total+' · 位置补标 '+(state.annotation_counts?.confirmed||0)+'张';
   const proposals=state.annotation_proposal_counts;
@@ -562,11 +564,12 @@ async function refreshState(){
   const errorOption=$('statusFilter').querySelector('option[value="error_review"]');
   if(errorOption)errorOption.textContent='错例待复核 / 补标（'+(state.error_review_counts?.pending||0)+'）';
   renderStatusControls();
-  $('scanStatus').textContent=state.scan.running?'后台扫描中，已发现 '+state.scan.found+' 张；可以先分类已索引图片。':state.scan.error||'目录索引已更新 · 原图按需读取 · 预览缓存上限 256MB';
+  $('scanStatus').textContent=state.scan.running?'后台扫描中，已发现 '+state.scan.found+' 张；可以先分类已索引图片。':state.scan.error||'后台持续识别 · 人工纠正不阻塞 · 原图按需读取';
   $('scanStatus').classList.toggle('error',!!state.scan.error);
   $('rescan').disabled=state.scan.running;$('openRoot').disabled=state.scan.running;
   if(tagsChanged)renderTags();else renderWorkflow();return state;
 }
+let lastAutomaticCount=-1;
 async function poll(){
   try{
     const state=await refreshState();
@@ -576,10 +579,10 @@ async function poll(){
     if(S.busy||S.navigating){setTimeout(poll,2500);return;}
     if(S.loaded&&S.reviewQueueReloadPending&&canReloadReviewQueue()){
       await reload();S.reviewQueueReloadPending=false;
-    }else if(S.loaded&&$('statusFilter').value!=='auto_boxes'&&!S.dirty&&(state.counts.total!==lastIndexed||(scanWasRunning&&!state.scan.running))){
+    }else if(S.loaded&&$('statusFilter').value!=='auto_boxes'&&!S.dirty&&!globalThis.AnnotationUI?.hasWork?.()&&(state.counts.total!==lastIndexed||(scanWasRunning&&!state.scan.running)||(!S.current&&lastAutomaticCount!==(state.recommendations?.automatic_counts?.completed||0)))){
       await reload({target:S.current?.id,index:S.index,keep:!!S.current});
     }
-    lastIndexed=state.counts.total;scanWasRunning=state.scan.running;
+    lastAutomaticCount=state.recommendations?.automatic_counts?.completed||0;lastIndexed=state.counts.total;scanWasRunning=state.scan.running;
   }catch(error){$('scanStatus').textContent='本机服务连接暂时中断，请重新打开桌面入口。已有标签保存在本机。';$('scanStatus').classList.add('error');}
   setTimeout(poll,2500);
 }
@@ -680,7 +683,7 @@ on('applyBatch','click',async()=>{await saveDraft();const result=await api('/api
 on('toggleImport','click',()=>$('importPanel').hidden=!$('importPanel').hidden);
 on('previewImport','click',async()=>{const result=await api('/api/import/preview',{path:$('manifestPath').value});S.importKey=result.key;$('importSummary').textContent='可确认 '+result.completed_count+' 张，责任待补暂存 '+result.draft_count+' 张；冲突 '+result.conflicts+' 张；需手工处理的文件夹：'+(result.unknown_folders.join('、')||'无')+'。'+result.notice;$('applyImport').hidden=!(result.completed_count+result.draft_count);});
 on('applyImport','click',async()=>{await saveDraft();const result=await api('/api/import/apply',{key:S.importKey});$('applyImport').hidden=true;await refreshState();await reload({index:S.index});toast('已导入 '+result.imported+' 张确认标签、'+result.drafts+' 张暂存');});
-on('export','click',async()=>{await saveDraft();const link=document.createElement('a');link.href='/api/export?'+params({format:$('exportFormat').value});link.download='';link.click();toast('导出当前筛选的已确认标签；暂存请先按 Enter 确认');});
+on('export','click',async()=>{await saveDraft();const link=document.createElement('a');link.href='/api/export?'+params({format:$('exportFormat').value});link.download='';link.click();toast('导出当前筛选结果，清单标明机器或人工来源；暂存不导出');});
 document.addEventListener('keydown',e=>{
   if($('reviewQualityPanel').hidden)return;
   if(e.key==='Escape'){e.preventDefault();e.stopImmediatePropagation();setReviewQuality();return;}
