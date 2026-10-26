@@ -1,0 +1,8 @@
+{
+  "name": "styolox-source-release",
+  "private": true,
+  "scripts": {
+    "deploy:check": "node tools/verify-github-before-deploy.mjs",
+    "release:package": "python tools/package-source.py"
+  }
+}

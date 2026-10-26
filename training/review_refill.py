@@ -285,10 +285,7 @@ def refill_cycle(config_path, check_only=False):
                         report.update(status='generating', batch_id=batch_id, detail='正在独立识别新图片，人工审核进度不影响执行。')
                         publish_status(config, report)
                         snapshot = run/'labels.sqlite3'; manifest = run/'proposals.json'
-                        remote_snapshot = PurePosixPath(config['remote_data'])/'training-snapshots'/(batch_id+'.sqlite3')
-                        worker.ssh(config, [config['remote_python'], PurePosixPath(config['remote_base'])/'current'/'deployment'/'snapshot.py',
-                            PurePosixPath(config['remote_data'])/'labels.sqlite3', remote_snapshot], log=run/'snapshot.log')
-                        worker.transfer(config, config['ssh_alias']+':'+str(remote_snapshot), str(snapshot))
+                        worker.fetch_snapshot(config, batch_id, snapshot, log=run/'snapshot.log')
                         worker.run_process([config['python_executable'], Path(config['training_root'])/'review_refill.py',
                             '--config', config_path, '--infer', '--snapshot', snapshot, '--output', manifest,
                             '--attempts', root/'review-refill-attempts.json'], timeout=600,
