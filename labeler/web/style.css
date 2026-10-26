@@ -308,3 +308,15 @@
   .workspace-v2 .label-panel[data-panel-view="quick"] .label-panel-heading{flex-wrap:wrap}
   .workspace-v2 .label-panel[data-panel-view="quick"] .responsibility-switch{grid-template-columns:1fr}
 }
+
+/* A reserved right dock keeps both classification editors outside the image. */
+@media(min-width:680px){
+  .workspace-v2{--classification-dock-width:clamp(380px,36vw,620px)}
+  .workspace-v2 .workspace{padding-right:calc(var(--classification-dock-width) + 24px)}
+  .workspace-v2 .box-editor,
+  .workspace-v2 .label-panel,
+  .workspace-v2 .label-panel[data-panel-view="quick"],
+  .workspace-v2 .label-panel[data-panel-view="state"]{position:fixed;left:auto!important;right:12px;bottom:76px;width:var(--classification-dock-width);max-height:calc(100dvh - 170px);overflow:auto}
+  .workspace-v2 .box-editor{bottom:auto}
+  .workspace-v2 .label-panel .label-scroll{overflow:auto}
+}

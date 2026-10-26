@@ -16,7 +16,8 @@ const fire=(name,e)=>handlers['photoStage:'+name](e);
 (async()=>{
  fire('pointerdown',event(1000,600));fire('pointermove',event(1002,601));fire('pointerup',event(1002,601));
  assert.equal(el('labelPanel').dataset.panelView,'quick');assert.equal(el('labelPanel').hidden,false);assert.equal(el('labelPanel').focused,true);
- assert.ok(parseFloat(el('labelPanel').style.left)+660<=1272);assert.ok(parseFloat(el('labelPanel').style.top)+430<=644);
+ assert.equal(el('labelPanel').style.left,'');assert.equal(el('labelPanel').style.top,'');
+ const css=fs.readFileSync('web/style.css','utf8');assert.ok(css.includes('padding-right:calc(var(--classification-dock-width) + 24px)'));assert.ok(css.includes('right:12px;bottom:76px;width:var(--classification-dock-width)'));
  assert.equal(context.S.panX,0,'Small click jitter must not pan');
  run("chooseProblemResponsibility('崩边','运输')");assert.equal(JSON.stringify(context.S.current.label.problem_responsibilities.崩边),'["运输"]');
  run("chooseProblemResponsibility('崩边','安装')");assert.equal(JSON.stringify(context.S.current.label.problem_responsibilities.崩边),'["运输","安装"]');calls.length=0;

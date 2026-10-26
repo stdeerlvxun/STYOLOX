@@ -52,7 +52,7 @@ class Element{
   assert.match(el('boxEditorAutomatic').textContent,/默认：生产/);
   assert.equal(el('boxEditorResponsibilitySection').hidden,false);assert.equal(button('boxEditorResponsibilities','生产'),undefined,'Automatic role is text below instead of a leading button');
   assert.deepEqual(el('boxEditorResponsibilities').children.map(b=>b.textContent),['运输','待核','原材料']);assert.equal(button('boxEditorResponsibilities','运输').disabled,false,'Alternative roles must remain clickable for standard problems');
-  assert.ok(parseFloat(el('boxEditor').style.left)<=490&&parseFloat(el('boxEditor').style.top)<=252,'Popup stays inside viewport');
+  assert.equal(el('boxEditor').style.left,'auto');assert.equal(el('boxEditor').style.right,'12px');assert.ok(parseFloat(el('boxEditor').style.top)<=252,'Editor stays in the right dock');
   await vm.runInContext('AnnotationUI.saveDraft()',context);
   assert.equal(writes.at(-1).status,'draft');assert.deepEqual(writes.at(-1).boxes[0],human,'Adding a box preserves existing human coordinates and metadata');
   assert.deepEqual(writes.at(-1).boxes[1].responsibilities,['生产']);

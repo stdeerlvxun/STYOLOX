@@ -258,9 +258,7 @@ function setLabelPanel(view=null){
 function openQuickClassification(x,y){
   if(!S.current||S.busy||S.navigating||$('photo').hidden)return;
   setLabelPanel('quick');renderTags();
-  const panel=$('labelPanel'),width=panel.offsetWidth||620,height=panel.offsetHeight||450;
-  panel.style.left=Math.max(8,Math.min(x+12,window.innerWidth-width-8))+'px';
-  panel.style.top=Math.max(8,Math.min(y+12,window.innerHeight-height-76))+'px';
+  const panel=$('labelPanel');
   panel.focus?.({preventScroll:true});
 }
 async function submitWorkspace(classificationOnly=false){

@@ -209,7 +209,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "e30db803999f07c979a48569f1112d51eb9b65d6",
+    "source_commit": "b0edd277956a92d865b6ead73462e6f841e2dbf4",
     "files": [
       {
         "path": ".gitignore",
@@ -357,7 +357,7 @@
       },
       {
         "path": "test_box_flow_ui.cjs",
-        "sha256": "d07f65868842a6dd23f4e059a82e17d7b98232ee47934f696b159e1031f80c7a"
+        "sha256": "ab91f735ab2f3d0fdd0d4b1c0e69ed8528ba24221cb2e4b49238049bdc390aab"
       },
       {
         "path": "test_box_proposals.py",
@@ -369,7 +369,7 @@
       },
       {
         "path": "test_quick_classification.cjs",
-        "sha256": "fdae8ab1d792911ebbc9573fb82f6f129fc5fe3bfade21b1148e8b36fdfddb4a"
+        "sha256": "d9fea2882e958ee2f4d304bf81247e4d02382250a078aca00028fbc7a8d03be7"
       },
       {
         "path": "test_recommendations.py",
@@ -421,11 +421,11 @@
       },
       {
         "path": "web/annotations.js",
-        "sha256": "c1675ba2d2dde3c8c58fb69f5d2f8ab11b214d3cc6f73d0638348e53078cd027"
+        "sha256": "7439f65a2e9760713f2fc992e7fd736b0d19c4d33ca1d3701d88bf1e0da4b034"
       },
       {
         "path": "web/app.js",
-        "sha256": "92914b8892485a804c25482209cd94e377fec4067ad916a97c62aab3dd55fafb"
+        "sha256": "71386dfc3a60a9b9d8987ea41fb247a8857201529a797e62b0af08a5354ce24a"
       },
       {
         "path": "web/index.html",
@@ -433,7 +433,7 @@
       },
       {
         "path": "web/style.css",
-        "sha256": "fa2d2cffd36b5f0d1ac4d8b7401a80f3bd27205be70ee9bdd50293866c49e92b"
+        "sha256": "0f1e83fa29ffc3d0bbc49410e1add6a5722aeffe8057579f79f108059617f490"
       },
       {
         "path": "启动分类工具.cmd",
