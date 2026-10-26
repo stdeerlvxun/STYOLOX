@@ -4,7 +4,7 @@ const el=id=>nodes[id]??={hidden:true,dataset:{},style:{},offsetWidth:660,offset
 el('photo').hidden=false;
 const context=vm.createContext({$:el,S:{current:{id:1,label:{defects:['崩边'],responsibilities:['生产'],problem_responsibilities:{崩边:['生产']},image_state:'defect'}},rules:{崩边:'生产'},panX:0,panY:0,labelStep:1},
  AnnotationUI:{hideEditor(){},isLoading:()=>false,hasWork:()=>true,async submitImage(){calls.push('boxes');}},
- window:{innerWidth:1280,innerHeight:720,addEventListener(){}},document:{addEventListener(name,fn){if(name==='keydown')keys.push(fn);}},
+ window:{innerWidth:1280,innerHeight:720,addEventListener(){}},document:{addEventListener(name,fn){if(name==='keydown')keys.push(fn);else handlers['document:'+name]=fn;}},
  renderTags(){},edited(){calls.push('edited');},async commit(){calls.push('classification');},transform(){},on(id,event,fn){handlers[id+':'+event]=fn;},fail(error){throw error;}});
 const run=code=>vm.runInContext(code,context);
 run(source.slice(source.indexOf('function setLabelPanel('),source.indexOf('function buttonTag(')));
@@ -16,8 +16,19 @@ const fire=(name,e)=>handlers['photoStage:'+name](e);
 (async()=>{
  fire('pointerdown',event(1000,600));fire('pointermove',event(1002,601));fire('pointerup',event(1002,601));
  assert.equal(el('labelPanel').dataset.panelView,'quick');assert.equal(el('labelPanel').hidden,false);assert.equal(el('labelPanel').focused,true);
- assert.equal(el('labelPanel').style.left,'');assert.equal(el('labelPanel').style.top,'');
- const css=fs.readFileSync('web/style.css','utf8');assert.ok(css.includes('padding-right:calc(var(--classification-dock-width) + 24px)'));assert.ok(css.includes('right:12px;bottom:76px;width:var(--classification-dock-width)'));
+ assert.equal(el('labelPanel').style.left,'608px');assert.equal(el('labelPanel').style.top,'159px');
+ const css=fs.readFileSync('web/style.css','utf8');assert.ok(!css.includes('padding-right:calc(var(--classification-dock-width) + 24px)'));
+ for(const [x,y] of [[0,0],[1279,0],[0,719],[1279,719],[640,360]]){
+   run('openQuickClassification('+x+','+y+')');
+   const left=parseFloat(el('labelPanel').style.left),top=parseFloat(el('labelPanel').style.top);
+   assert.ok(left>=12&&left+660<=1268);assert.ok(top>=12&&top+430<=708);
+ }
+ const fixed=el('labelPanel').style.left;fire('pointermove',event(50,50));assert.equal(el('labelPanel').style.left,fixed,'Panel must not chase the pointer while choosing');
+ run('openQuickClassification(400,300)');assert.equal(el('labelPanel').style.left,'12px','Left image half prefers the left edge when space is limited');
+ run('openQuickClassification(900,300)');assert.equal(el('labelPanel').style.left,'608px','Right image half stays on the right');
+ run(source.slice(source.indexOf("document.addEventListener('click',e=>{const inside=")).split('\n')[0]);
+ handlers['document:click']({target:{closest:()=>null},composedPath:()=>[{id:'removed-tag-button'},{id:'labelPanel'}]});
+ assert.equal(el('labelPanel').hidden,false,'Rebuilt tag buttons keep the original event path and must not close the panel');
  assert.equal(context.S.panX,0,'Small click jitter must not pan');
  run("chooseProblemResponsibility('崩边','运输')");assert.equal(JSON.stringify(context.S.current.label.problem_responsibilities.崩边),'["运输"]');
  run("chooseProblemResponsibility('崩边','安装')");assert.equal(JSON.stringify(context.S.current.label.problem_responsibilities.崩边),'["运输","安装"]');calls.length=0;

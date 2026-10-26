@@ -1,5 +1,6 @@
 """HTTP contract for batch status, idempotent registration and archive downloads."""
 import hashlib
+import datetime as dt
 import json
 import tempfile
 import threading
@@ -38,6 +39,21 @@ class ReviewBatchAPITest(unittest.TestCase):
         with self.assertRaises(HTTPError):self.post('/api/review-batches/worker',{'pending':-1})
         self.post('/api/review-batches/register',{'batch_id':'empty','proposal_ids':[]})
         self.assertEqual(self.get('/api/review-batches/state')['archives_count'],0)
+
+    def test_runtime_status_http_and_auth_preserve_labels(self):
+        before=self.get('/api/state')['counts']
+        body={'kind':'training','root_id':self.store.current_root()['id'],'value':{
+            'status':'training','updated_at':dt.datetime.now(dt.timezone.utc).isoformat(),
+            'pending_confirmed_images':20,'minimum_confirmed_images':20,'epoch':7,'max_epochs':50}}
+        self.assertTrue(self.post('/api/automation/report',body)['ok'])
+        self.assertEqual(self.get('/api/state')['automation']['training']['epoch'],7)
+        self.assertEqual(self.get('/api/state')['counts'],before)
+        with self.assertRaises(HTTPError) as rejected:
+            urlopen(Request(self.url+'/api/automation/report',json.dumps(body).encode(),
+                            headers={'Content-Type':'application/json'}),timeout=5)
+        self.assertEqual(rejected.exception.code,403)
+        with urlopen(self.url+'/automation.js',timeout=5) as response:
+            self.assertIn(b'AutomationUI',response.read())
     def test_completed_batch_archive_is_json_object_with_confirmed_result(self):
         identity=self.identity
         self.store.commit([(identity,{'defects':['崩边'],'responsibilities':['生产'],'problem_responsibilities':{'崩边':['生产']},'image_state':'defect','note':'保留'})])

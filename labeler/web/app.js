@@ -254,10 +254,24 @@ function setLabelPanel(view=null){
   if(view){panel.dataset.panelView=view;$('labelPanelTitle').textContent=view==='quick'?'整图快捷分类':view==='state'?'图片状态与备注':'图片信息 / 分类';globalThis.AnnotationUI?.hideEditor?.();}
   $('imageStateToggle').setAttribute('aria-expanded',String(view==='state'));
   $('labelPanelToggle').setAttribute('aria-expanded',String(view==='details'||view==='quick'));
+  if(view==='quick')positionQuickClassification();
+}
+function positionQuickClassification(){
+  const panel=$('labelPanel');if(panel.hidden||panel.dataset.panelView!=='quick')return;
+  const anchor=S.quickAnchor||{x:window.innerWidth/2,y:window.innerHeight/2};
+  const margin=12,gap=12,width=panel.offsetWidth,height=panel.offsetHeight;
+  const stage=$('photoStage')?.getBoundingClientRect?.();
+  const midpoint=stage?stage.left+stage.width/2:window.innerWidth/2;
+  let left=anchor.x<midpoint?anchor.x-width-gap:anchor.x+gap,top=anchor.y+gap;
+  if(top+height>window.innerHeight-margin)top=anchor.y-height-gap;
+  panel.style.left=Math.round(Math.max(margin,Math.min(left,window.innerWidth-width-margin)))+'px';
+  panel.style.top=Math.round(Math.max(margin,Math.min(top,window.innerHeight-height-margin)))+'px';
 }
 function openQuickClassification(x,y){
   if(!S.current||S.busy||S.navigating||$('photo').hidden)return;
+  S.quickAnchor={x:Number.isFinite(x)?x:window.innerWidth/2,y:Number.isFinite(y)?y:window.innerHeight/2};
   setLabelPanel('quick');renderTags();
+  positionQuickClassification();
   const panel=$('labelPanel');
   panel.focus?.({preventScroll:true});
 }
@@ -568,6 +582,7 @@ async function refreshState(){
   $('locate').textContent=state.server_mode?'复制原文件路径':'定位原文件';
   if(!$('manifestPath').value)$('manifestPath').value=state.default_manifest;
   const automatic=state.recommendations?.automatic_counts||{};
+  globalThis.AutomationUI?.render(state);
   $('counts').textContent='已索引 '+state.counts.total+' · 自动分类 '+(automatic.completed||0)+' · 人工确认 '+state.counts.classified+' · 待识别 '+(automatic.waiting||0);
   if(automatic.failed)$('counts').textContent+=' · 识别重试 '+automatic.failed;
   if(S.reviewEnabled)$('counts').textContent+=' · 模型无关待审核 '+state.model_review.pending;
@@ -609,7 +624,7 @@ on('statusFilter','change',()=>changeStatusFilter($('statusFilter').value));
 for(const button of $('commonStatusFilters').querySelectorAll('button[data-status]'))button.addEventListener('click',()=>changeStatusFilter(button.dataset.status)?.catch(fail));
 on('reviewKind','change',()=>reload());on('search','input',()=>{clearTimeout(searchTimer);searchTimer=setTimeout(()=>reload().catch(fail),300);});
 on('clearFilters','click',()=>{S.filters.defect.clear();S.filters.responsibility.clear();return reload();});
-on('thumbViewport','scroll',scheduleRender);window.addEventListener('resize',scheduleRender);
+on('thumbViewport','scroll',scheduleRender);window.addEventListener('resize',()=>{scheduleRender();positionQuickClassification();});
 on('note','input',()=>{if(S.current){S.current.label.note=$('note').value;edited();}});
 for(const button of $('imageStates').children)button.addEventListener('click',()=>{if(S.current&&!S.busy&&!S.navigating){const label=S.current.label;label.image_state=button.dataset.state;label.defects=[];if(label.problem_responsibilities){label.problem_responsibilities={};label.responsibilities=['待核'];}edited();}});
 for(const [id,group]of [['addDefect','defect'],['addResponsibility','responsibility']])on(id,'submit',async e=>{e.preventDefault();const input=$(id).elements.name;S.tags=await api('/api/tag',{group,name:input.value});input.value='';renderTags();});
@@ -618,7 +633,7 @@ on('showLibrary','click',()=>document.body.classList.toggle('library-open'));
 on('workspacePrevious','click',()=>selectIndex(S.index-1));
 on('workspaceCommit','click',()=>submitWorkspace(!$('labelPanel').hidden&&$('labelPanel').dataset.panelView==='quick'));
 on('imageStateToggle','click',()=>setLabelPanel(!$('labelPanel').hidden&&$('labelPanel').dataset.panelView==='state'?null:'state'));
-on('labelPanelToggle','click',()=>{if(!$('labelPanel').hidden&&$('labelPanel').dataset.panelView==='quick')setLabelPanel();else openQuickClassification(window.innerWidth-640,window.innerHeight-540);});
+on('labelPanelToggle','click',event=>{if(!$('labelPanel').hidden&&$('labelPanel').dataset.panelView==='quick')setLabelPanel();else openQuickClassification(event.clientX,event.clientY);});
 on('classificationDetails','click',()=>{setLabelPanel('details');renderTags();});
 on('labelPanelClose','click',()=>setLabelPanel());
 on('reviewBatchArchiveToggle','click',()=>setReviewArchive($('reviewArchivePanel').hidden));
@@ -738,7 +753,7 @@ document.addEventListener('keydown',e=>{
 });
 window.addEventListener('beforeunload',e=>{if(S.dirty){e.preventDefault();e.returnValue='';}});
 document.addEventListener('click',e=>{for(const details of document.querySelectorAll('.add-tag-details[open],#contextDetails[open],#responsibilityMatrix[open]'))if(!details.contains(e.target))details.open=false;});
-document.addEventListener('click',e=>{if(!$('labelPanel').hidden&&!e.target.closest('#labelPanel,#labelPanelToggle,#imageStateToggle')&&!($('labelPanel').dataset.panelView==='quick'&&e.target.closest('#photoStage')))setLabelPanel();});
+document.addEventListener('click',e=>{const inside=e.composedPath?.().some(node=>['labelPanel','labelPanelToggle','imageStateToggle'].includes(node.id));if(!$('labelPanel').hidden&&!inside&&!e.target.closest('#labelPanel,#labelPanelToggle,#imageStateToggle')&&!($('labelPanel').dataset.panelView==='quick'&&e.target.closest('#photoStage')))setLabelPanel();});
 document.addEventListener('click',e=>{if(!$('reviewArchivePanel').hidden&&!e.target.closest('#reviewArchivePanel,#reviewBatchArchiveToggle'))setReviewArchive();});
 document.addEventListener('click',e=>{if(!$('reviewQualityPanel').hidden&&!e.target.closest('#reviewQualityPanel,#reviewQualityToggle'))setReviewQuality();});
 const launchStatus=new URLSearchParams(location.search).get('status');

@@ -786,6 +786,7 @@ class Application:
                 "error_review_counts": self.store.one("SELECT COUNT(*) total,SUM(e.status='pending') pending FROM error_reviews e JOIN images i "
                     "ON i.id=e.image_id WHERE i.root_id=? AND e.run_id=(SELECT value FROM settings WHERE key='error_review_run')",(root['id'],)),
                 "recommendations": self.recommendations.state(),
+                "automation": self.training_rounds.runtime_state(),
                 "model_review": self.store.review_counts(),
                 "server_mode": bool(self.paths.nas_root), "sort": "reported_at_desc"}
 
@@ -947,7 +948,7 @@ class Handler(BaseHTTPRequestHandler):
             url = urlsplit(self.path)
             params = parse_qs(url.query)
             path = url.path
-            static = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css",'/annotations.js':'annotations.js'}
+            static = {"/": "index.html", "/app.js": "app.js", "/style.css": "style.css",'/annotations.js':'annotations.js','/automation.js':'automation.js'}
             if path in static:
                 file = BASE / "web" / static[path]
                 return self.send(file.read_bytes(), mimetypes.guess_type(file.name)[0] or "text/plain")
@@ -1042,6 +1043,8 @@ class Handler(BaseHTTPRequestHandler):
                 result = self.app.update_review_worker(body)
             elif path == '/api/training-rounds/record':
                 result = self.app.training_rounds.record(body)
+            elif path == '/api/automation/report':
+                result = self.app.training_rounds.record_runtime(body)
             elif path == '/api/annotation-proposals/reject':
                 result=store.annotations.reject_proposal(int(body['id']),body['proposal_id'],body)
             elif path == '/api/annotation-feedback':

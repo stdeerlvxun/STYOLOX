@@ -78,7 +78,8 @@ class Recommendations:
         return {'enabled':self.enabled,'model_id':self.meta.get('model_id') if self.meta else None,
                 'human_confirmation_required':True,'responsibility_output':False,
                 'automatic_classification_enabled':self.enabled,'human_confirmation_blocks_automation':False,
-                'automatic_counts':self.store.automatic.counts(),
+                'automatic_counts':self.store.automatic.counts(self.meta.get('model_id') if self.meta else None),
+                'error':self.error,
                 'unrelated_suggestions_enabled':bool(self.meta and self.meta.get('state_filter'))}
 
     def start_review_scan(self):

@@ -6,11 +6,24 @@
   <title>售后图片分类</title>
   <link rel="stylesheet" href="/style.css">
   <script src="/app.js" defer></script>
+  <script src="/automation.js" defer></script>
   <script src="/annotations.js" defer></script>
 </head>
 <body class="workspace-v2">
   <header class="app-header">
     <div class="title-line"><h1>售后图片分类</h1><span id="sourceNote" class="source-note">直接查看原图 · 标签保存在本机</span><span id="counts" role="status"></span>
+    <details id="automationPanel" class="automation-panel">
+      <summary id="automationSummary">后台进度 · 等待上报</summary>
+      <div class="automation-content">
+        <div class="automation-heading"><h2>后台运行进度</h2><button id="automationClose" type="button">收起</button></div>
+        <div class="automation-columns">
+          <section aria-labelledby="classificationStatusTitle"><h3 id="classificationStatusTitle">自动分类</h3><p id="classificationStatus"></p><dl id="classificationStats"></dl><p id="classificationModel" class="automation-model"></p><p id="classificationUpdated" class="automation-model"></p></section>
+          <section aria-labelledby="inferenceStatusTitle"><h3 id="inferenceStatusTitle">自动补框</h3><p id="inferenceStatus"></p><dl id="inferenceStats"></dl><p id="inferenceBatch"></p><p id="inferenceModel" class="automation-model"></p><p id="inferenceUpdated" class="automation-model"></p></section>
+          <section aria-labelledby="trainingStatusTitle"><h3 id="trainingStatusTitle">纠错训练</h3><p id="trainingStatus"></p><progress id="trainingProgress" max="20" value="0" aria-label="合规纠错样本累计进度"></progress><dl id="trainingStats"></dl><p id="trainingReason"></p><p id="trainingUpdated" class="automation-model"></p></section>
+        </div>
+        <p class="automation-note">页面每 2.5 秒读取状态；训练中约每 20 秒上报。累计补框按已保存批次汇总，尝试张次含跨模型重试；历史缺失指标显示“未记录”。未出框不等于正常，训练完成不等于模型已启用。</p>
+      </div>
+    </details>
     <details id="directorySettings"><summary>目录与服务</summary><div class="directory-panel"><div class="directory-line">
       <label for="rootPath">原始目录</label><input id="rootPath" spellcheck="false" aria-label="原始图片目录">
       <button id="openRoot">打开目录</button><button id="rescan">重新扫描</button>

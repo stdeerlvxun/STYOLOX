@@ -309,14 +309,38 @@
   .workspace-v2 .label-panel[data-panel-view="quick"] .responsibility-switch{grid-template-columns:1fr}
 }
 
-/* A reserved right dock keeps both classification editors outside the image. */
+/* Quick classification opens beside the pointer without changing image geometry. */
 @media(min-width:680px){
   .workspace-v2{--classification-dock-width:clamp(380px,36vw,620px)}
-  .workspace-v2 .workspace{padding-right:calc(var(--classification-dock-width) + 24px)}
-  .workspace-v2 .box-editor,
-  .workspace-v2 .label-panel,
-  .workspace-v2 .label-panel[data-panel-view="quick"],
+  .workspace-v2 .label-panel:not([data-panel-view="quick"]),
   .workspace-v2 .label-panel[data-panel-view="state"]{position:fixed;left:auto!important;right:12px;bottom:76px;width:var(--classification-dock-width);max-height:calc(100dvh - 170px);overflow:auto}
-  .workspace-v2 .box-editor{bottom:auto}
   .workspace-v2 .label-panel .label-scroll{overflow:auto}
 }
+.workspace-v2 .box-editor{bottom:auto;overflow:auto}
+.workspace-v2 .label-panel[data-panel-view="quick"]{right:auto;bottom:auto;width:min(620px,calc(100vw - 24px));max-height:calc(100dvh - 24px);overflow:hidden}
+.workspace-v2 .label-panel[data-panel-view="quick"] .label-scroll,
+.workspace-v2 .label-panel[data-panel-view="quick"] .label-scroll:has(#recommendationPanel[hidden]){flex:0 1 auto;min-height:0;overflow:auto;overscroll-behavior:contain;grid-template-rows:max-content max-content;align-content:start}
+.workspace-v2 .label-panel[data-panel-view="quick"] #defectTags button,
+.workspace-v2 .label-panel[data-panel-view="quick"] #responsibilityTags button{min-height:38px;font-size:14px;line-height:1.35;padding:6px 4px}
+.workspace-v2 .label-panel[data-panel-view="quick"] .chips button[aria-pressed="true"]{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:600}
+.workspace-v2 .label-panel[data-panel-view="quick"] .chips button[aria-pressed="true"]:hover{background:#174abd;color:#fff}
+.workspace-v2 .label-panel[data-panel-view="quick"] .commit-bar{flex-shrink:0;border-top:1px solid var(--line);padding:10px 12px}
+.workspace-v2 .label-panel[data-panel-view="quick"] .commit-bar .primary{height:40px;font-size:14px}
+.automation-panel{flex-shrink:0}
+.automation-panel>summary{font-size:13px;color:#294267;cursor:pointer;padding:6px 8px;border:1px solid var(--line);border-radius:4px;white-space:nowrap}
+.automation-content{position:fixed;z-index:45;right:12px;top:58px;width:min(880px,calc(100vw - 24px));max-height:calc(100dvh - 80px);overflow:auto;background:var(--surface);color:var(--text);border:1px solid #aebed3;border-radius:8px;padding:20px}
+.automation-heading{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:16px}
+.automation-heading h2{font-size:18px;margin:0}
+.automation-columns{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:24px}
+.automation-columns section{min-width:0}
+.automation-columns h3{font-size:15px;margin:0 0 8px}
+.automation-columns p{font-size:13px;line-height:1.6;margin:6px 0;overflow-wrap:anywhere}
+.automation-columns dl{margin:12px 0;font-size:13px;font-variant-numeric:tabular-nums}
+.automation-columns dl>div{display:flex;justify-content:space-between;gap:12px;padding:6px 0;border-bottom:1px solid var(--line)}
+.automation-columns dd{margin:0;font-weight:600}
+.automation-columns .status-stale{color:#964c00}
+.automation-columns .status-error{color:var(--danger)}
+.automation-model{color:var(--muted);font-size:12px!important}
+.automation-note{color:var(--muted);font-size:12px;line-height:1.6;margin:16px 0 0}
+.automation-columns progress{width:100%;height:8px;accent-color:var(--accent)}
+@media(max-width:900px){.automation-columns{grid-template-columns:1fr;gap:20px}.automation-content{width:min(500px,calc(100vw - 24px))}.automation-panel>summary{max-width:180px;overflow:hidden;text-overflow:ellipsis}.workspace-v2 .source-note{display:none}}

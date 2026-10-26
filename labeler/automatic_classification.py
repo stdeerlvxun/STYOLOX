@@ -72,10 +72,12 @@ class AutomaticClassifications:
             ORDER BY i.reported_at DESC,i.id DESC LIMIT 1''',
             (self.store.current_root()['id'], model_id, time.time()))
 
-    def counts(self):
+    def counts(self, model_id=None):
         row = self.store.one('''SELECT SUM(CASE WHEN '''+self.match()+''' THEN 1 ELSE 0 END) completed,
             SUM(CASE WHEN '''+self.match()+''' AND json_extract(m.data,'$.outcome')='unresolved' THEN 1 ELSE 0 END) unresolved,
-            SUM(m.status='error') failed,
+            SUM(CASE WHEN m.status='error' AND m.source_size=i.size AND m.source_mtime=i.mtime_ns THEN 1 ELSE 0 END) failed,
+            MAX(CASE WHEN '''+self.match()+''' THEN m.updated_at END) last_success_at,
+            SUM(CASE WHEN '''+self.match()+''' AND m.model_id<>? THEN 1 ELSE 0 END) model_refresh,
             SUM(CASE WHEN m.image_id IS NULL OR m.source_size<>i.size OR m.source_mtime<>i.mtime_ns
                 THEN 1 ELSE 0 END) waiting
             FROM images i LEFT JOIN automatic_classifications m ON m.image_id=i.id
@@ -83,5 +85,5 @@ class AutomaticClassifications:
             AND NOT EXISTS(SELECT 1 FROM drafts d WHERE d.image_id=i.id)
             AND NOT EXISTS(SELECT 1 FROM annotation_documents a WHERE a.image_id=i.id
                 AND json_extract(a.data,'$.status')='confirmed')''',
-            (self.store.current_root()['id'],))
-        return {key: value or 0 for key, value in row.items()}
+            (model_id, self.store.current_root()['id']))
+        return {key: value if key=='last_success_at' else value or 0 for key, value in row.items()}

@@ -74,4 +74,15 @@ class AutomaticTests(unittest.TestCase):
         self.assertEqual(self.store.one('SELECT COUNT(*) n FROM images WHERE available=1')['n'],5)
         self.assertEqual(self.store.automatic.counts()['waiting'],5)
 
+    def test_model_refresh_and_source_change_statistics(self):
+        self.record()
+        counts=self.store.automatic.counts('new-model')
+        self.assertEqual(counts['model_refresh'],1)
+        self.assertIsNotNone(counts['last_success_at'])
+        image=self.store.image(self.ids[1])
+        self.store.automatic.record(image,{'model_id':'test'},(image['size'],image['mtime_ns']),{},error='offline')
+        with self.store.lock,self.store.db:
+            self.store.db.execute('UPDATE images SET size=size+1 WHERE id=?',(image['id'],))
+        self.assertEqual(self.store.automatic.counts()['failed'],0)
+
 if __name__=='__main__':unittest.main()

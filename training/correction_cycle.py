@@ -336,7 +336,10 @@ def transfer(config, source, destination, timeout=180):
 
 
 def execute_cycle(config, config_path, payload, items, run, report):
+    from runtime_report import stage, publish_training, timestamp
     run.mkdir(parents=True, exist_ok=False)
+    report.update(status='preparing', started_at=timestamp())
+    publish_training(config, report, run)
     (run/'source').mkdir()
     atomic_json(run/'feedback.json', payload)
     atomic_json(run/'report.json', report)
@@ -357,6 +360,8 @@ def execute_cycle(config, config_path, payload, items, run, report):
     included = actual_feedback_ids(dataset, items)
     trainable_images = len({r['image_id'] for r in items if r['feedback_id'] in included})
     report['trainable_confirmed_images_after_snapshot'] = trainable_images
+    report['validation_images'] = sum(row.get('split') in ('val','validation') for row in dataset.get('records', []))
+    report['test_images'] = sum(row.get('split') == 'test' for row in dataset.get('records', []))
     if not included:
         report.update(status='waiting_for_trainable_confirmed_images', feedback_ids_actually_trained=[])
         return report
@@ -371,8 +376,10 @@ def execute_cycle(config, config_path, payload, items, run, report):
     if config.get('class_agnostic',False):training_arguments.append('--class-agnostic')
     if config.get('fixed_threshold') is not None:
         training_arguments.extend(['--fixed-threshold',str(config['fixed_threshold'])])
-    run_process(training_arguments,timeout=1200 if focused_training else 600,
-                cwd=root,log=run/'train.log')
+    report['max_epochs'] = 50
+    with stage(config, report, 'training', run):
+        run_process(training_arguments,timeout=1200 if focused_training else 600,
+                    cwd=root,log=run/'train.log')
     if config.get('roi_verifier_enabled') and sum(len(row.get('negative_rois',[]))
             for row in dataset.get('negative_feedback_records',[])) >= 5:
         verified_detector=run/'roi-detector'
@@ -380,6 +387,8 @@ def execute_cycle(config, config_path, payload, items, run, report):
                      '--base-run',detector,'--run',verified_detector],timeout=300,cwd=root,log=run/'roi-verifier.log')
         detector=verified_detector
     metrics = read_json(detector/'metrics.json')
+    if type(metrics.get('completed_epochs')) is int:
+        report['epoch'] = metrics['completed_epochs']
     if metrics.get('test') is not None or metrics.get('test_evaluation_pending') is not True:
         raise ValueError('Automatic rounds must not reuse the held-out test set')
     model_sha = hashlib.sha256((detector/'detector.pt').read_bytes()).hexdigest()
@@ -397,9 +406,10 @@ def execute_cycle(config, config_path, payload, items, run, report):
                  '--feedback-ids', ','.join(map(str, included)), '--model-sha256', model_sha,
                  '--output', marker_remote], log=run/'feedback-training.log')
     report['feedback_training_recorded'] = True
-    run_process([python, root/'train_detector.py', '--dataset', dataset_path, '--run', detector,
-                 '--compare-validation-to', config['current_detector_run']], timeout=300,
-                cwd=root, log=run/'compare.log')
+    with stage(config, report, 'validating', run):
+        run_process([python, root/'train_detector.py', '--dataset', dataset_path, '--run', detector,
+                     '--compare-validation-to', config['current_detector_run']], timeout=300,
+                    cwd=root, log=run/'compare.log')
     comparison = read_json(detector/'validation-comparison.json')
     if (comparison.get('dataset_sha256')!=hashlib.sha256(dataset_path.read_bytes()).hexdigest()
         or comparison.get('candidate', {}).get('model_sha256')!=model_sha):
@@ -523,8 +533,6 @@ def cycle(config_path, check_only=False, refill_only=False, training_only=False)
     try:
         report = training_cycle(config_path, check_only)
     except Exception as error:
-        if refill is None:
-            raise
         report = {'status': 'error', 'error': str(error), 'training_completed': False}
     if refill is not None:
         report['training_status'] = report['status']
@@ -535,6 +543,11 @@ def cycle(config_path, check_only=False, refill_only=False, training_only=False)
             atomic_json(Path(config['runs_root'])/'latest-state.json', report)
     if not check_only:
         from training_report import publish_reports
+        from runtime_report import publish_training
+        try:
+            publish_training(config, report)
+        except (OSError, ValueError) as error:
+            report['runtime_report_error'] = str(error)
         try:
             report['training_reports'] = publish_reports(config)
         except Exception as error:

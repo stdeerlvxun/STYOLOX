@@ -207,6 +207,8 @@ def generate(config, snapshot, output, attempts_path, model=None):
 
 
 def publish_status(config, report):
+    from runtime_report import publish_inference
+    publish_inference(config, report)
     policy = settings(config)
     body = {'enabled': policy['enabled'], 'low_water': policy['low_water'], 'batch_size': policy['batch_size'],
             'status': report['status'], 'detail': str(report.get('detail', report.get('error', '')))[:1000]}

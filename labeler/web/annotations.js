@@ -88,9 +88,15 @@
   }
   function popupPosition(){
     if(!A.popup)return;
-    const editor=el('boxEditor'),top=Math.max(8,stage.getBoundingClientRect().top);
-    editor.style.left='auto';editor.style.right='12px';editor.style.top=top+'px';
-    editor.style.maxHeight=Math.max(160,(window.innerHeight||720)-top-84)+'px';
+    const editor=el('boxEditor'),bounds=stage.getBoundingClientRect(),margin=12,gap=12;
+    const vw=window.innerWidth||1280,vh=window.innerHeight||720;
+    editor.style.maxHeight=Math.max(120,vh-margin*2)+'px';
+    const width=editor.offsetWidth,height=editor.offsetHeight;
+    const midpoint=Number.isFinite(bounds.width)?bounds.left+bounds.width/2:vw/2;
+    const left=A.popup.x<midpoint?A.popup.x-width-gap:A.popup.x+gap;
+    let top=A.popup.y+gap;if(top+height>vh-margin)top=A.popup.y-height-gap;
+    editor.style.left=Math.max(margin,Math.min(left,vw-width-margin))+'px';
+    editor.style.right='auto';editor.style.top=Math.max(margin,Math.min(top,vh-height-margin))+'px';
   }
   function editPopup(action){
     if(!A.popup)return;A.popup.changed=true;A.popup.error='';

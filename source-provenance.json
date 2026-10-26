@@ -1,6 +1,6 @@
 {
   "training": {
-    "source_commit": "a362131c562be2b6d4819556f1ddea754899dbbe",
+    "source_commit": "d06b55fccd88e78f003d2db0d2b8658c52c81e56",
     "files": [
       {
         "path": ".gitignore",
@@ -20,7 +20,7 @@
       },
       {
         "path": "README.md",
-        "sha256": "4de13fbe915b0ffedfa83bbfa238060c5ea08bfd6cd189d98ba18e2827914dc5"
+        "sha256": "d52b5aa88bb2bcfa310f64c5fe9b05c7b63f0631f5ac69d00910a02933b634cf"
       },
       {
         "path": "REVIEW_LOOP.md",
@@ -32,7 +32,7 @@
       },
       {
         "path": "correction_cycle.py",
-        "sha256": "f9725848188645dcc451382783b97f922b673356fd9327c30e06fac6a672f100"
+        "sha256": "00d9362299506fbf42af3a6dfbabd3977a318b0511d5a34dee661f0795fb07bb"
       },
       {
         "path": "correction_focus.py",
@@ -92,7 +92,7 @@
       },
       {
         "path": "review_refill.py",
-        "sha256": "73f6317134632925e96f2f8931c125767fce5116536c73f99e781caf90ef4747"
+        "sha256": "8acc681e361bf96d3137b26e3b39a385d4d1cf6e9dc55e28e4c37c9686bf9762"
       },
       {
         "path": "roi_feedback.py",
@@ -101,6 +101,10 @@
       {
         "path": "roi_verifier.py",
         "sha256": "96e780d3bedd5ce0490f112b6eb65b164544bfb1f8102d9082e705e444d1e6df"
+      },
+      {
+        "path": "runtime_report.py",
+        "sha256": "b8dabf3ac87ee90ece5a50d2ff105fd7551a9ff0f3778584b17e220585e5f74a"
       },
       {
         "path": "test_annotation_audit.py",
@@ -163,6 +167,10 @@
         "sha256": "38379084c67882765a57c630d8f7d91ade97c3398a769b84899d003ed49918dd"
       },
       {
+        "path": "test_runtime_report.py",
+        "sha256": "3c72abd0c5f09d4b5eba580889861bb7b1b0d30f6e1630249254212536a263d1"
+      },
+      {
         "path": "test_tiled_inference.py",
         "sha256": "d9786a438e8f4ba24e9bf177cd0df7f85ed1861c9327f90daecf2999f0d18c4b"
       },
@@ -209,7 +217,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "b0edd277956a92d865b6ead73462e6f841e2dbf4",
+    "source_commit": "401f0aa9d0da548833fb2489abff310f86312685",
     "files": [
       {
         "path": ".gitignore",
@@ -217,7 +225,7 @@
       },
       {
         "path": "DESIGN.md",
-        "sha256": "c106d5a4d245c28e1a6e3aa0d4f61d7304953be1a66456441e24ce96e9ea86a0"
+        "sha256": "64a58314d6c40bfdcfd4575c661ef44f8c34db4f2bd2cb3c9a09bce614c0cb98"
       },
       {
         "path": "PRODUCT.md",
@@ -225,7 +233,7 @@
       },
       {
         "path": "README.md",
-        "sha256": "fb1ce4f6a99794876d18c2192cf7337d3f1a788c663a7c1cbeea82eaa6bae280"
+        "sha256": "b9e53b5e531478204de9746efaf3c46a2100332ee6007777fd4d43e17bc3ca1e"
       },
       {
         "path": "REVIEW_LOOP.md",
@@ -237,11 +245,11 @@
       },
       {
         "path": "app.py",
-        "sha256": "098780145860af4d04255d0c719cd39fed2a3056d45ab9254b1bab74bedd132d"
+        "sha256": "e51940f602591d369b4bd0a367744260a028a4a4394c7818da349d0bdc494002"
       },
       {
         "path": "automatic_classification.py",
-        "sha256": "7ea6b0f28c11279b2aa1f52d9b3cb8da5df12ae6a439a122c9c48f01ba80f06f"
+        "sha256": "af56400e5a63c761db8f607dd3ece73a79ee6ac91779a7139671d06f8afe41e2"
       },
       {
         "path": "deployment/enable_recommendations_101.py",
@@ -313,7 +321,7 @@
       },
       {
         "path": "recommendations.py",
-        "sha256": "3de05c426cc91b5b304852e9436ab96e22a0b9f8fc2cf7b07eed856c9b418a5d"
+        "sha256": "79362e163d9c8d36a873fc82b5ab2b8c42993de759f22dd07c0e9d0270e02666"
       },
       {
         "path": "requirements.txt",
@@ -353,11 +361,15 @@
       },
       {
         "path": "test_automatic_classification.py",
-        "sha256": "94d3f526b5e20c9c685cfc20366d4af1fd2338dd5a78350312fa60d79d380e93"
+        "sha256": "80bf0ccaeb30524418cc439a68410d6fa940666c65752cb2410de99bee168be2"
+      },
+      {
+        "path": "test_automation_ui.cjs",
+        "sha256": "e3474acc23584db4f2458333fa16e31e79b0379def105a53572cd9c8a8b9beb6"
       },
       {
         "path": "test_box_flow_ui.cjs",
-        "sha256": "ab91f735ab2f3d0fdd0d4b1c0e69ed8528ba24221cb2e4b49238049bdc390aab"
+        "sha256": "c95b5dd18b6ff6ed52be645846d321b638a758f9650ce52dd9eb8b6b91961828"
       },
       {
         "path": "test_box_proposals.py",
@@ -369,7 +381,7 @@
       },
       {
         "path": "test_quick_classification.cjs",
-        "sha256": "d9fea2882e958ee2f4d304bf81247e4d02382250a078aca00028fbc7a8d03be7"
+        "sha256": "8fdcc3e2584e7d6e2dc9ae245c1c097876715e0b7416607327efa64e53e6077b"
       },
       {
         "path": "test_recommendations.py",
@@ -377,7 +389,7 @@
       },
       {
         "path": "test_review_batch_api.py",
-        "sha256": "39202f63a75462b818ff4d9a3545fd184ac8a5b8cdeeba5c4d07cc45c52da5fe"
+        "sha256": "4dc74b282ef657c68b26adbf604eae197d186416b78eafa05532a17d762c2f9f"
       },
       {
         "path": "test_review_batches.py",
@@ -404,6 +416,10 @@
         "sha256": "5afe57db4f27f5f4d191746ef7ce0cf0e85b0a0af237357dd3114103cb6a23e1"
       },
       {
+        "path": "test_runtime_status.py",
+        "sha256": "7770c047eaa9a3d151ed460c4c9c3fa38155f334dd0c63621de8996ed7dbc3f7"
+      },
+      {
         "path": "test_training_rounds.py",
         "sha256": "07fbeda3ea3860203c02eac2a5520f9570fed2a056696bb0259d0fee202f44de"
       },
@@ -417,23 +433,27 @@
       },
       {
         "path": "training_rounds.py",
-        "sha256": "cf6a3a8e0936fb31983c33ed41327b76d48a8235476a0cdceef352181a294f85"
+        "sha256": "e2e00b9f374dae041d85f50895da8199e068b8b1d27bab3991b65ba42d2cac48"
       },
       {
         "path": "web/annotations.js",
-        "sha256": "7439f65a2e9760713f2fc992e7fd736b0d19c4d33ca1d3701d88bf1e0da4b034"
+        "sha256": "f266023404857f966e48ef9d1ed1336060effa07a5eefce202d29455223e05b8"
       },
       {
         "path": "web/app.js",
-        "sha256": "71386dfc3a60a9b9d8987ea41fb247a8857201529a797e62b0af08a5354ce24a"
+        "sha256": "85942b7ab76b9a4d1ffe87fe9651ef1a1ba41245a86379c14a07b653d3e1f370"
+      },
+      {
+        "path": "web/automation.js",
+        "sha256": "697436ef55092daf0b934c4466e1c72cb4d6380fd19dd4237363bad474856626"
       },
       {
         "path": "web/index.html",
-        "sha256": "e8e71ee747cfda98b49529b4592c9b72289b5e1d112903847fb19ef5a8b81194"
+        "sha256": "240a9d7b791a892474bac6b2353e968f8aa623efa26d7ddc1b0a97e783fe869c"
       },
       {
         "path": "web/style.css",
-        "sha256": "0f1e83fa29ffc3d0bbc49410e1add6a5722aeffe8057579f79f108059617f490"
+        "sha256": "45b52d31a98a538517988fc7a269c83d7ee5a44bbd9ae305cce77801882362ff"
       },
       {
         "path": "启动分类工具.cmd",

@@ -4,6 +4,7 @@ import math
 import os
 import re
 import uuid
+import datetime as dt
 from pathlib import Path
 
 
@@ -11,6 +12,70 @@ class TrainingRounds:
     def __init__(self, store):
         self.store = store
         self.path = Path(store.data_dir) / 'training-rounds.json'
+
+    def runtime_state(self):
+        root = self.store.current_root()['id']
+        path = Path(self.store.data_dir) / ('automation-status-'+str(root)+'.json')
+        with self.store.lock:
+            value = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+        now = dt.datetime.now(dt.timezone.utc)
+        for name, item in value.items():
+            age = max(0, (now-dt.datetime.fromisoformat(item['updated_at'])).total_seconds())
+            item['stale'] = age > (180 if item.get('status') in ('preparing', 'training', 'validating', 'generating') else 900)
+        return value
+
+    def record_runtime(self, body):
+        if not isinstance(body, dict) or body.get('kind') not in ('training', 'inference'):
+            raise ValueError('Invalid automation status kind')
+        if body.get('root_id') != self.store.current_root()['id']:
+            raise ValueError('Automation status belongs to another image root')
+        value = body.get('value')
+        text_fields = {'status','updated_at','started_at','run_id','batch_id','model_id','reason',
+                       'promotion_reason','statistics_since','last_success_at'}
+        count_fields = {'pending_confirmed_images','minimum_confirmed_images','trainable_confirmed_images',
+                        'validation_images','test_images','epoch','max_epochs','attempted_images',
+                        'generated_images','generated_boxes','images_without_boxes','errors','imported_images',
+                        'total_attempted_images','total_generated_images','total_generated_boxes',
+                        'total_images_without_boxes','total_errors','total_imported_images','batches',
+                        'already_attempted_images','remaining_eligible_images'}
+        bool_fields = {'training_completed','promoted'}
+        if not isinstance(value, dict) or set(value)-(text_fields|count_fields|bool_fields):
+            raise ValueError('Invalid automation status fields')
+        cleaned = {}
+        for key, item in value.items():
+            if key in text_fields and (not isinstance(item, str) or len(item)>1000):
+                raise ValueError('Invalid automation status text')
+            if key in count_fields and (type(item) is not int or not 0<=item<=10**12):
+                raise ValueError('Invalid automation count')
+            if key in bool_fields and type(item) is not bool:
+                raise ValueError('Invalid automation flag')
+            cleaned[key] = item
+        for key in ('updated_at', 'started_at', 'statistics_since', 'last_success_at'):
+            if key not in cleaned:continue
+            try:
+                stamp = dt.datetime.fromisoformat(cleaned[key].replace('Z','+00:00'))
+                if stamp.tzinfo is None:raise ValueError()
+                cleaned[key] = stamp.astimezone(dt.timezone.utc).isoformat()
+            except (ValueError, TypeError):
+                raise ValueError('Invalid automation timestamp')
+        if not cleaned.get('status') or 'updated_at' not in cleaned:
+            raise ValueError('Automation status and timestamp required')
+        if dt.datetime.fromisoformat(cleaned['updated_at']) > dt.datetime.now(dt.timezone.utc)+dt.timedelta(minutes=5):
+            raise ValueError('Automation timestamp is in the future')
+        path = Path(self.store.data_dir) / ('automation-status-'+str(body['root_id'])+'.json')
+        with self.store.lock:
+            state = json.loads(path.read_text(encoding='utf-8')) if path.exists() else {}
+            previous = state.get(body['kind'], {})
+            if previous.get('updated_at', '') > cleaned['updated_at']:
+                return {'ok': True, 'ignored_older': True}
+            state[body['kind']] = cleaned
+            temporary = path.with_suffix('.'+uuid.uuid4().hex+'.tmp')
+            try:
+                temporary.write_text(json.dumps(state, ensure_ascii=False), encoding='utf-8')
+                os.replace(temporary, path)
+            finally:
+                temporary.unlink(missing_ok=True)
+        return {'ok': True}
 
     def state(self):
         with self.store.lock:
