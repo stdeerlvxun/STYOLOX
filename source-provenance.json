@@ -217,7 +217,7 @@
     ]
   },
   "labeler": {
-    "source_commit": "401f0aa9d0da548833fb2489abff310f86312685",
+    "source_commit": "33c1bbc1b30480217c32071c5407f5c644a5c12f",
     "files": [
       {
         "path": ".gitignore",
@@ -369,7 +369,7 @@
       },
       {
         "path": "test_box_flow_ui.cjs",
-        "sha256": "c95b5dd18b6ff6ed52be645846d321b638a758f9650ce52dd9eb8b6b91961828"
+        "sha256": "716328169dd508bdece21755d4221abacfb8f156f0b8298c736283512ba301af"
       },
       {
         "path": "test_box_proposals.py",
@@ -420,6 +420,10 @@
         "sha256": "7770c047eaa9a3d151ed460c4c9c3fa38155f334dd0c63621de8996ed7dbc3f7"
       },
       {
+        "path": "test_save_navigation.cjs",
+        "sha256": "bd295afa06c5a2d17d0eac93eb97233e24d8c72950389533442c28b84c718d91"
+      },
+      {
         "path": "test_training_rounds.py",
         "sha256": "07fbeda3ea3860203c02eac2a5520f9570fed2a056696bb0259d0fee202f44de"
       },
@@ -437,11 +441,11 @@
       },
       {
         "path": "web/annotations.js",
-        "sha256": "f266023404857f966e48ef9d1ed1336060effa07a5eefce202d29455223e05b8"
+        "sha256": "a58672c10bee3118b99d7ce4bb4f4647847503aa2f3caa7087d93bdeb3bad16f"
       },
       {
         "path": "web/app.js",
-        "sha256": "85942b7ab76b9a4d1ffe87fe9651ef1a1ba41245a86379c14a07b653d3e1f370"
+        "sha256": "b946f44ec0fc4bfc7936539f421743456963a3272c207ad560069d056dbc1a69"
       },
       {
         "path": "web/automation.js",

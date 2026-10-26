@@ -566,7 +566,8 @@ async function commit(){
     const saved=await api('/api/commit',{id,label:S.current.label,only_unclassified:!!S.current.recommendation_applied,expected_draft:S.current.recommendation_draft_fingerprint||null,review_run:reviewRun});S.dirty=false;
     const result=await api('/api/images?'+params({offset:index,limit:1}));let next=index;
     if(result.items[0]?.id===id)next=index+1;
-    await refreshState();await reload({index:Math.min(next,Math.max(0,result.total-1))});toast(saved.review_completed?'分类已保存，错例复核已完成；位置框另行补标':'已确认并保存标签');
+    // Global counts are refreshed by poll(); they must not delay a confirmed save.
+    await reload({index:Math.min(next,Math.max(0,result.total-1))});toast(saved.review_completed?'分类已保存，错例复核已完成；位置框另行补标':'已确认并保存标签');
   }finally{S.busy=false;renderTags();}
 }
 async function refreshState(){

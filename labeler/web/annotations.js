@@ -277,7 +277,8 @@
     const incomplete=A.boxes.find(box=>Object.hasOwn(box,'responsibilities')&&!box.responsibilities.length);
     if(incomplete){A.selected=incomplete.id;openPopup(incomplete,stage.getBoundingClientRect().left+20,stage.getBoundingClientRect().top+20);throw new Error('请先为“'+incomplete.problem+'”选择责任，拿不准可选待核');}
     const completedId=A.id,completedIndex=S.index;S.busy=true;renderTags();render();
-    try{closePopup();await saveDraft();await save('confirmed');await refreshState();await refreshFeedback();
+    // Poll refreshes global counts; loadForImage refreshes feedback for the next image.
+    try{closePopup();await saveDraft();await save('confirmed');
       const remaining=await api('/api/images?'+params({offset:completedIndex,limit:1}));
       const next=remaining.items[0]?.id===completedId?completedIndex+1:completedIndex;
       await reload({index:Math.min(next,Math.max(0,remaining.total-1))});toast('审核已保存；已有分类保留，新增问题与责任已追加');}

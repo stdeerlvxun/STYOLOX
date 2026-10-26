@@ -23,7 +23,7 @@ class Element{
     document:{getElementById:el,createElement:tag=>new Element(tag),createElementNS:(_,tag)=>new Element(tag),addEventListener(type,handler){if(type==='keydown')keys.push(handler);},body:new Element('body')},
     window:{innerWidth:840,innerHeight:620,addEventListener(){}},
     S:{current:{id:7,label:structuredClone(label),has_draft:true,draft_fingerprint:'visible-draft'},tags:{defect:['残胶','划伤','崩边'],responsibility:['生产','运输','原材料']},rules:{崩边:'生产',残胶:'生产'},busy:false,navigating:false,zoom:1,rotation:0,panX:0,panY:0,index:0},
-    clientId:()=>'new-'+(++ids),fail:e=>failures.push(e),toast(){},renderTags(){},params:args=>new URLSearchParams(args).toString(),async refreshState(){},async reload({index}){navigations++;navigationIndexes.push(index);},
+    clientId:()=>'new-'+(++ids),fail:e=>failures.push(e),toast(){},renderTags(){},params:args=>new URLSearchParams(args).toString(),async refreshState(){throw new Error('Confirmation must not wait for global statistics');},async reload({index}){navigations++;navigationIndexes.push(index);},
     async api(path,body){if(path==='/api/annotation-feedback/state')return {confirmed_corrections:6};
       if(path.startsWith('/api/images?'))return {items:[{id:retainedInQueue?7:8}],total:3};
       if(!body){reads++;return {source:{sha256:'source',width:1600,height:900},document:{boxes:structuredClone(fixtureBoxes),negative_regions:structuredClone(fixtureRegions),outcome:'boxed',proposal_id:fixtureProposalId,proposal_content_fingerprint:fixtureProposalFingerprint},proposal:structuredClone(fixtureProposal),version,label_fingerprint:'old-label'};}
