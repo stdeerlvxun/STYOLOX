@@ -1,0 +1,8 @@
+{
+  "name": "styolox-source-release",
+  "private": true,
+  "scripts": {
+    "deploy:check": "node tools/source-release.mjs check",
+    "release:package": "node tools/source-release.mjs package"
+  }
+}

@@ -6,6 +6,7 @@ only: it does not acquire a lock, create files, query CUDA, train, or publish.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import datetime as dt
 import hashlib
 import json
@@ -14,6 +15,7 @@ import os
 from pathlib import Path, PurePosixPath
 import re
 import shlex
+import sqlite3
 import subprocess
 import sys
 import urllib.parse
@@ -335,6 +337,159 @@ def transfer(config, source, destination, timeout=180):
                         source, destination], timeout=timeout)
 
 
+SNAPSHOT_RUN = re.compile(r'(?:auto|refill)-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}')
+# Sent only by the published worker. The ownership token and directory lock also
+# cover SSH timeouts: a still-running snapshot child inherits the lock descriptor.
+REMOTE_SNAPSHOT = r'''
+import contextlib, hashlib, json, os, pathlib, re, shutil, stat, subprocess, sys
+
+def targets(data, run_id):
+    if not re.fullmatch(r'(?:auto|refill)-[0-9]{8}T[0-9]{6}Z-[a-f0-9]{6}', run_id):
+        raise ValueError('SNAPSHOT_RUN_INVALID')
+    root = pathlib.Path(data)
+    if not root.is_absolute() or root.resolve() != root or not root.is_dir():
+        raise ValueError('SNAPSHOT_ROOT_INVALID')
+    folder = root / 'training-snapshots'
+    if folder.exists() and (folder.resolve() != folder or not folder.is_dir()):
+        raise ValueError('SNAPSHOT_PARENT_INVALID')
+    target = folder / (run_id + '.sqlite3')
+    paths = [target, target.with_suffix('.report.json'), target.with_suffix('.labels.json')]
+    paths.append(pathlib.Path(str(target) + '-journal'))
+    return root, folder, target, folder / ('.' + run_id + '.owner'), paths
+
+def regular(path):
+    info = path.lstat()
+    if path.resolve() != path or not stat.S_ISREG(info.st_mode):
+        raise ValueError('SNAPSHOT_FILE_INVALID')
+    return info
+
+@contextlib.contextmanager
+def folder_lock(folder):
+    import fcntl
+    fd = os.open(folder, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        try: fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError: raise ValueError('SNAPSHOT_ACTIVE') from None
+        yield fd
+    finally:
+        os.close(fd)
+
+def require_closed(paths):
+    if not paths: return
+    identities = {(p.stat().st_dev, p.stat().st_ino) for p in paths}
+    proc = pathlib.Path('/proc')
+    if not proc.is_dir(): raise ValueError('SNAPSHOT_OPEN_FILES_UNVERIFIED')
+    for process in proc.iterdir():
+        if not process.name.isdigit() or process.name == str(os.getpid()): continue
+        try:
+            descriptors = list((process / 'fd').iterdir())
+            for descriptor in descriptors:
+                try: info = descriptor.stat()
+                except FileNotFoundError: continue
+                if (info.st_dev, info.st_ino) in identities: raise ValueError('SNAPSHOT_ACTIVE')
+        except FileNotFoundError: continue
+        except PermissionError: raise ValueError('SNAPSHOT_OPEN_FILES_UNVERIFIED') from None
+
+def digest(path):
+    value = hashlib.sha256()
+    with path.open('rb') as stream:
+        for block in iter(lambda: stream.read(1024 * 1024), b''): value.update(block)
+    return value.hexdigest()
+
+def operation(mode, data, run_id, token, python, snapshot_program):
+    if not re.fullmatch('[a-f0-9]{32}', token): raise ValueError('SNAPSHOT_OWNER_INVALID')
+    root, folder, target, owner, paths = targets(data, run_id)
+    if mode not in ('create', 'cleanup'): raise ValueError('SNAPSHOT_MODE_INVALID')
+    if not folder.exists():
+        if mode == 'cleanup': return {'status': 'absent'}
+        folder.mkdir(mode=0o700)
+    with folder_lock(folder) as lock_fd:
+        if mode == 'create':
+            if any(p.exists() or p.is_symlink() for p in [owner, *paths]):
+                raise ValueError('SNAPSHOT_ALREADY_EXISTS')
+            source = root / 'labels.sqlite3'; size = regular(source).st_size
+            disk = os.statvfs(folder)
+            if shutil.disk_usage(folder).free < size + 512 * 1024 * 1024:
+                raise ValueError('SNAPSHOT_SPACE_LOW')
+            if disk.f_files and disk.f_favail < 16: raise ValueError('SNAPSHOT_INODES_LOW')
+            with owner.open('x', encoding='ascii') as marker: marker.write(token)
+            result = subprocess.run([python, snapshot_program, str(source), str(target)],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=120,
+                pass_fds=(lock_fd,), check=False)
+            if result.returncode: raise ValueError('SNAPSHOT_CREATE_FAILED')
+            regular(target)
+            return {'status': 'created', 'sha256': digest(target), 'bytes': target.stat().st_size}
+        if not owner.exists():
+            if any(p.exists() or p.is_symlink() for p in paths):
+                raise ValueError('SNAPSHOT_OWNERSHIP_UNVERIFIED')
+            return {'status': 'absent'}
+        regular(owner)
+        if owner.stat().st_size != 32 or owner.read_text(encoding='ascii') != token:
+            raise ValueError('SNAPSHOT_OWNERSHIP_UNVERIFIED')
+        present = [p for p in paths if p.exists() or p.is_symlink()]
+        for path in present: regular(path)
+        require_closed(present)
+        for path in present: path.unlink()
+        owner.unlink()
+        return {'status': 'cleaned'}
+
+if __name__ == '__main__':
+    print(json.dumps(operation(*sys.argv[1:])))
+'''
+
+
+def fetch_snapshot(config, run_id, destination, log=None):
+    """Download one verified snapshot and remove only this invocation's remote files."""
+    if not isinstance(run_id, str) or not SNAPSHOT_RUN.fullmatch(run_id):
+        raise ValueError('SNAPSHOT_RUN_INVALID')
+    for key in ('remote_data', 'remote_base', 'remote_python'):
+        value = config[key]
+        if (not isinstance(value, str) or not value.startswith('/')
+                or '..' in PurePosixPath(value).parts or any(ord(c) < 32 for c in value)):
+            raise ValueError('SNAPSHOT_REMOTE_PATH_INVALID')
+    destination = Path(destination)
+    if destination.exists() or destination.is_symlink():
+        raise ValueError('SNAPSHOT_LOCAL_EXISTS')
+    from snapshot_storage import space_check
+    space_check(destination.parent)
+    remote = PurePosixPath(config['remote_data']) / 'training-snapshots' / (run_id + '.sqlite3')
+    program = PurePosixPath(config['remote_base']) / 'current' / 'deployment' / 'snapshot.py'
+    token, original = uuid.uuid4().hex, None
+    arguments = [config['remote_python'], '-c', REMOTE_SNAPSHOT]
+    tail = [config['remote_data'], run_id, token, config['remote_python'], program]
+    try:
+        result = json.loads(ssh(config, [*arguments, 'create', *tail], timeout=180, log=log))
+        if (result.get('status') != 'created' or not re.fullmatch('[a-f0-9]{64}', result.get('sha256', ''))
+                or type(result.get('bytes')) is not int or result['bytes'] <= 0):
+            raise ValueError('SNAPSHOT_REMOTE_PROOF_INVALID')
+        space_check(destination.parent, result['bytes'])
+        transfer(config, config['ssh_alias'] + ':' + str(remote), str(destination))
+        if destination.is_symlink() or not destination.is_file() or destination.stat().st_size != result['bytes']:
+            raise ValueError('SNAPSHOT_DOWNLOAD_INVALID')
+        value = hashlib.sha256()
+        with destination.open('rb') as stream:
+            for block in iter(lambda: stream.read(1024 * 1024), b''): value.update(block)
+        if value.hexdigest() != result['sha256']:
+            raise ValueError('SNAPSHOT_HASH_MISMATCH')
+        with closing(sqlite3.connect(destination.resolve().as_uri() + '?mode=ro&immutable=1', uri=True)) as db:
+            if db.execute('PRAGMA quick_check').fetchall() != [('ok',)]:
+                raise ValueError('SNAPSHOT_SQLITE_INVALID')
+        return destination
+    except BaseException as error:
+        original = error
+        raise
+    finally:
+        try:
+            cleanup = json.loads(ssh(config, [*arguments, 'cleanup', *tail], timeout=60))
+            if cleanup.get('status') not in ('absent', 'cleaned'):
+                raise ValueError('SNAPSHOT_CLEANUP_UNVERIFIED')
+        except Exception as cleanup_error:
+            if original is None:
+                raise
+            if hasattr(original, 'add_note'):
+                original.add_note('SNAPSHOT_CLEANUP_FAILED: ' + type(cleanup_error).__name__)
+
+
 def execute_cycle(config, config_path, payload, items, run, report):
     from runtime_report import stage, publish_training, timestamp
     run.mkdir(parents=True, exist_ok=False)
@@ -344,13 +499,9 @@ def execute_cycle(config, config_path, payload, items, run, report):
     atomic_json(run/'feedback.json', payload)
     atomic_json(run/'report.json', report)
     run_id = run.name
-    remote_snapshot = str(PurePosixPath(config['remote_data'])/'training-snapshots'/(run_id+'.sqlite3'))
     deployment = PurePosixPath(config['remote_base'])/'current'/'deployment'
-    ssh(config, [config['remote_python'], deployment/'snapshot.py',
-                 PurePosixPath(config['remote_data'])/'labels.sqlite3', remote_snapshot],
-        log=run/'snapshot.log')
     snapshot = run/'source'/'labels.sqlite3'
-    transfer(config, config['ssh_alias']+':'+remote_snapshot, str(snapshot))
+    fetch_snapshot(config, run_id, snapshot, log=run/'snapshot.log')
     python, root = config['python_executable'], Path(config['training_root'])
     dataset_path, detector = run/'dataset.json', run/'detector'
     run_process([python, root/'prepare_detector.py', '--run', run, '--snapshot', snapshot,

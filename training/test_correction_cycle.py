@@ -41,6 +41,10 @@ def config(root):
 
 
 class CycleProtectionTests(unittest.TestCase):
+    def setUp(self):
+        network = patch.object(worker.urllib.request, 'urlopen', side_effect=OSError('Network disabled in unit tests'))
+        network.start(); self.addCleanup(network.stop)
+
     @unittest.skipUnless(worker.os.name=='nt', 'Windows process startup contract')
     def test_worker_children_do_not_create_windows(self):
         completed = SimpleNamespace(returncode=0, stdout='done', stderr='')
@@ -263,7 +267,7 @@ class CycleProtectionTests(unittest.TestCase):
             with patch.object(worker, 'export_feedback', return_value=payload), \
                  patch.object(worker, 'gpu_available', return_value=(True, 'free')), \
                  patch.object(worker, 'run_process', side_effect=fake_process), \
-                 patch.object(worker, 'transfer'), patch.object(worker, 'ssh') as remote:
+                 patch.object(worker, 'fetch_snapshot') as snapshot, patch.object(worker, 'ssh') as remote:
                 first = worker.cycle(path)
                 self.assertEqual(first['status'], 'trained_not_promoted')
                 self.assertEqual(first['feedback_ids_actually_trained'], list(range(1, 15)))
@@ -274,9 +278,26 @@ class CycleProtectionTests(unittest.TestCase):
                 self.assertEqual(len(trained), 1)
                 self.assertIn('--class-agnostic',trained[0][1])
                 self.assertEqual(trained[0][1][trained[0][1].index('--fixed-threshold')+1],'0.05')
+                snapshot.assert_called_once()
+                run = trained[0][0].parent
+                self.assertEqual(snapshot.call_args.args[1], run.name)
+                self.assertTrue(run.name.startswith('auto-'))
+                self.assertEqual(snapshot.call_args.args[2], run/'source'/'labels.sqlite3')
                 marker = [call.args[1] for call in remote.call_args_list if 'record_feedback_training.py' in str(call)]
                 self.assertEqual(len(marker), 1)
                 self.assertEqual(marker[0][marker[0].index('--feedback-ids')+1], ','.join(map(str, range(1, 15))))
+
+    def test_snapshot_failure_never_prepares_or_starts_training(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value = config(root)
+            run = Path(value['runs_root'])/'auto-20261026T100000Z-aaaaaa'
+            with patch('runtime_report.publish_training'), \
+                 patch.object(worker, 'fetch_snapshot', side_effect=RuntimeError('snapshot verification failed')) as snapshot, \
+                 patch.object(worker, 'run_process') as process:
+                with self.assertRaisesRegex(RuntimeError, 'snapshot verification failed'):
+                    worker.execute_cycle(value, root/'private.json', {'items': []}, [], run, {})
+            snapshot.assert_called_once(); process.assert_not_called()
+            self.assertFalse((run/'dataset.json').exists())
 
     def test_shell_injection_and_low_threshold_configuration_rejected(self):
         with tempfile.TemporaryDirectory() as directory:

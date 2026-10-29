@@ -56,6 +56,10 @@ def fixture(root, count=4):
 
 
 class RefillTests(unittest.TestCase):
+    def setUp(self):
+        network = patch.object(worker.urllib.request, 'urlopen', side_effect=OSError('Network disabled in unit tests'))
+        network.start(); self.addCleanup(network.stop)
+
     def test_eligible_policy_preserves_drafts_boxes_and_all_proposal_statuses(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory); value, snapshot = fixture(root, 10)
@@ -268,13 +272,32 @@ class RefillTests(unittest.TestCase):
             with patch.object(refill, 'api', side_effect=endpoint), patch.object(refill, 'publish_status'), \
                  patch.object(worker, 'gpu_available', return_value=(True, 'available')), \
                  patch.object(worker, 'run_process', side_effect=process), patch.object(worker, 'ssh', side_effect=remote), \
-                 patch.object(worker, 'transfer'):
+                 patch.object(worker, 'fetch_snapshot', side_effect=lambda c, b, p, **kw: p.write_bytes(b'verified test input')) as snapshot, patch.object(worker, 'transfer'):
                 result = refill.refill_cycle(path)
-            self.assertEqual(result['status'], 'refilled'); self.assertEqual(result['imported_images'], 1)
+            self.assertEqual(result['status'], 'refilled', result); self.assertEqual(result['imported_images'], 1)
             self.assertEqual(result['eligible_images'], 5); self.assertEqual(len(generated), 1)
             registration = [body for route, body in requests if route.endswith('/register')]
             self.assertEqual(registration[0]['proposal_ids'], ['actually-inserted'])
             self.assertEqual(worker.read_json(Path(value['runs_root'])/'review-refill-state.json'), {})
+            snapshot.assert_called_once()
+            self.assertEqual(snapshot.call_args.args[0], worker.validate_config(value))
+            batch_id = snapshot.call_args.args[1]
+            self.assertTrue(batch_id.startswith('refill-'))
+            self.assertEqual(snapshot.call_args.args[2], Path(value['runs_root'])/batch_id/'labels.sqlite3')
+
+    def test_snapshot_failure_never_starts_refill_inference_or_import(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory); value = {**config(root), 'review_refill_enabled': True}
+            path = root/'config.json'; worker.atomic_json(path, value)
+            with patch.object(refill, 'api', return_value={'pending': 0}), patch.object(refill, 'publish_status'), \
+                 patch.object(worker, 'gpu_available', return_value=(True, 'available')), \
+                 patch.object(worker, 'fetch_snapshot', side_effect=RuntimeError('snapshot verification failed')) as snapshot, \
+                 patch.object(worker, 'run_process') as process, patch.object(worker, 'ssh') as remote:
+                result = refill.refill_cycle(path)
+            self.assertEqual(result['status'], 'error')
+            self.assertEqual(result['error'], 'snapshot verification failed')
+            snapshot.assert_called_once(); process.assert_not_called(); remote.assert_not_called()
+            self.assertFalse((Path(value['runs_root'])/'review-refill-state.json').exists())
 
     def test_refill_only_never_starts_training_and_training_error_preserves_refill_success(self):
         with tempfile.TemporaryDirectory() as directory:

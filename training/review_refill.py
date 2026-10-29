@@ -18,6 +18,7 @@ import urllib.request
 import uuid
 
 import correction_cycle as worker
+import snapshot_storage as storage
 
 SELECTION_POLICY = 'all_unreviewed_typed_images_v3'
 
@@ -62,7 +63,7 @@ def api(config, path, body=None):
 
 def select_refill_rows(snapshot):
     """Suggest locations on all unreviewed images without changing training eligibility."""
-    db = sqlite3.connect(Path(snapshot).resolve().as_uri()+'?mode=ro', uri=True)
+    db = sqlite3.connect(Path(snapshot).resolve().as_uri()+'?mode=ro&immutable=1', uri=True)
     db.row_factory = sqlite3.Row
     try:
         root = int(db.execute("SELECT value FROM settings WHERE key='root'").fetchone()[0])
@@ -267,8 +268,23 @@ def refill_cycle(config_path, check_only=False):
     try:
         with worker.ExclusiveLock(root/'.review-refill.lock'), worker.ExclusiveLock(root/'.correction-cycle.lock'):
             state = worker.read_json(state_path) if state_path.exists() else {}
+            report['storage'] = storage.maintain(root, state, worker.atomic_json)
+            storage.space_check(root)
+            cooldown = state.get('empty_queue_until', 0)
+            model_file = Path(config['current_detector_run'])/'detector.pt'
+            if (not state.get('pending_import') and not state.get('pending_registration')
+                    and type(cooldown) in (int, float) and time.time() < cooldown
+                    and model_file.is_file() and state.get('empty_queue_model') == file_hash(model_file)):
+                report.update(status='waiting_for_new_images', detail='上轮没有新图片；每30分钟重新检查，避免重复下载整库。',
+                              next_check_at=cooldown)
+                worker.atomic_json(root/'review-refill-latest.json', report)
+                publish_status(config, report)
+                return report
             if state.get('pending_import') or state.get('pending_registration'):
+                resumed_run = (state.get('pending_import') or state.get('pending_registration')).get('run')
                 finish_import(config, state, state_path, report)
+                if resumed_run and Path(resumed_run).exists():
+                    storage.finish_input(root, resumed_run, state, worker.atomic_json)
             else:
                 pending = api(config, '/api/annotation-proposals/state')['pending']; report['pending'] = pending
                 if type(pending) is not int or pending < 0:
@@ -280,37 +296,48 @@ def refill_cycle(config_path, check_only=False):
                     if not available:
                         report.update(status='waiting_for_gpu', detail=reason)
                     else:
+                        if report['storage']['retained_bytes'] + storage.MAX_SNAPSHOT > storage.MAX_RETAINED:
+                            raise storage.DiskSpaceLow('SNAPSHOT_RETAINED_BUDGET')
                         batch_id = 'refill-'+dt.datetime.now(dt.timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-'+uuid.uuid4().hex[:6]
                         run = root/batch_id; run.mkdir(parents=True, exist_ok=False)
                         report.update(status='generating', batch_id=batch_id, detail='正在独立识别新图片，人工审核进度不影响执行。')
                         publish_status(config, report)
                         snapshot = run/'labels.sqlite3'; manifest = run/'proposals.json'
-                        remote_snapshot = PurePosixPath(config['remote_data'])/'training-snapshots'/(batch_id+'.sqlite3')
-                        worker.ssh(config, [config['remote_python'], PurePosixPath(config['remote_base'])/'current'/'deployment'/'snapshot.py',
-                            PurePosixPath(config['remote_data'])/'labels.sqlite3', remote_snapshot], log=run/'snapshot.log')
-                        worker.transfer(config, config['ssh_alias']+':'+str(remote_snapshot), str(snapshot))
-                        worker.run_process([config['python_executable'], Path(config['training_root'])/'review_refill.py',
-                            '--config', config_path, '--infer', '--snapshot', snapshot, '--output', manifest,
-                            '--attempts', root/'review-refill-attempts.json'], timeout=600,
-                            cwd=config['training_root'], log=run/'inference.log')
-                        generated = worker.read_json(manifest); summary = generated['summary']
-                        report.update(summary, eligible_images=summary['remaining_eligible_images'], batch_id=batch_id)
-                        if generated['items']:
-                            state['pending_import'] = {'batch_id': batch_id, 'manifest': str(manifest), 'run': str(run),
-                                'summary': {**summary, 'eligible_images': summary['remaining_eligible_images']},
-                                'metadata': {'source_model': generated['source_checkpoint_sha256'],
-                                             'model_id': generated['model_id'], 'generated_at': generated['created_at']}}
-                            worker.atomic_json(state_path, state)
-                            finish_import(config, state, state_path, report)
-                        else:
-                            report['status'] = 'no_more_eligible_images' if not summary['remaining_eligible_images'] else 'no_boxes_this_round'
-                        worker.atomic_json(run/'report.json', report)
+                        worker.fetch_snapshot(config, batch_id, snapshot, log=run/'snapshot.log')
+                        with storage.tracked_input(root, run, state, worker.atomic_json):
+                            worker.run_process([config['python_executable'], Path(config['training_root'])/'review_refill.py',
+                                '--config', config_path, '--infer', '--snapshot', snapshot, '--output', manifest,
+                                '--attempts', root/'review-refill-attempts.json'], timeout=600,
+                                cwd=config['training_root'], log=run/'inference.log')
+                            generated = worker.read_json(manifest); summary = generated['summary']
+                            report.update(summary, eligible_images=summary['remaining_eligible_images'], batch_id=batch_id)
+                            if generated['items']:
+                                state['pending_import'] = {'batch_id': batch_id, 'manifest': str(manifest), 'run': str(run),
+                                    'summary': {**summary, 'eligible_images': summary['remaining_eligible_images']},
+                                    'metadata': {'source_model': generated['source_checkpoint_sha256'],
+                                                 'model_id': generated['model_id'], 'generated_at': generated['created_at']}}
+                                worker.atomic_json(state_path, state)
+                                finish_import(config, state, state_path, report)
+                            else:
+                                report['status'] = 'no_more_eligible_images' if not summary['remaining_eligible_images'] else 'no_boxes_this_round'
+                            worker.atomic_json(run/'report.json', report)
+                            if not summary['remaining_eligible_images'] and not summary.get('errors', 0):
+                                state.update(empty_queue_until=time.time()+1800,
+                                             empty_queue_model=generated['source_checkpoint_sha256'])
+                                worker.atomic_json(state_path, state)
+                        report['storage'] = storage.maintain(root, state, worker.atomic_json)
             report['pending'] = api(config, '/api/annotation-proposals/state')['pending']
             report['detail'] = ('本轮尝试 '+str(report.get('attempted_images', 0))+' 张，生成 '+str(report.get('generated_images', 0))+
                 ' 张；当前模型尚未尝试的合格图片 '+str(report.get('eligible_images', '待统计'))+' 张。') if 'eligible_images' in report else report.get('detail', '')
             worker.atomic_json(root/'review-refill-latest.json', report)
     except worker.AlreadyRunning:
         report['status'] = 'waiting_for_worker'
+    except storage.DiskSpaceLow as error:
+        report.update(status='waiting_for_disk', detail='磁盘余量不足或快照达到上限；已停止下载和推理，保留标注数据。', error=str(error))
+        try:
+            worker.atomic_json(root/'review-refill-latest.json', report)
+        except OSError:
+            pass  # Another writer may already have exhausted the volume.
     except Exception as error:
         report.update(status='error', error=str(error))
         worker.atomic_json(root/'review-refill-latest.json', report)
